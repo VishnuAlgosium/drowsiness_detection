@@ -1,5 +1,6 @@
-opencv-python
-numpy
-mediapipe
-scipy
-pygame
+# Pinned to the versions verified working on the Raspberry Pi (Python 3.13.5)
+opencv-python==5.0.0.93
+numpy==2.5.1
+mediapipe==1.0.0
+scipy==1.18.0
+pygame==2.6.1
