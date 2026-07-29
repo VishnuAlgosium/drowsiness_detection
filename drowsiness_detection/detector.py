@@ -5,6 +5,8 @@ import time
 from collections import deque
 
 import cv2
+cv2.setNumThreads(4)  
+cv2.ocl.setUseOpenCL(False)  # Disable OpenCL to avoid GPU conflicts with ffplay
 import mediapipe as mp
 import numpy as np
 

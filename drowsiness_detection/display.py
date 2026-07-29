@@ -3,7 +3,8 @@
 ffplay renders through SDL2/OpenGL, so this avoids needing OpenCV built with
 GTK/Qt support and works fine with opencv-python-headless.
 """
-
+import os
+os.environ["OMP_NUM_THREADS"] = "4"
 import shutil
 import subprocess
 
@@ -35,7 +36,9 @@ class FFplayDisplay:
             "-window_title", title,
             "-i", "-",
         ]
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        env = os.environ.copy()
+        env["SDL_RENDER_DRIVER"] = "software"  # Use OpenGL for GPU acceleration
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,env=env)
 
     def show(self, frame: np.ndarray) -> bool:
         """Write a frame to ffplay. Returns False if ffplay has exited."""
