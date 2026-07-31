@@ -45,22 +45,4 @@ Keys (video window must have focus): `v` toggles the display on/off, `q` quits.
 - `logs/frames_<timestamp>.csv` — one row per frame: EAR, MAR, phone confidence,
   and FPS, for tuning thresholds after a QA session.
 
-## Note on video lag
 
-The face landmarker is lightweight and keeps up with the camera every frame.
-YOLO inference is much heavier on CPU — running it every frame is what causes
-the video feed to visibly lag behind real time, because frames pile up faster
-than they're processed. The NCNN export is generally faster on CPU than the
-ONNX/PyTorch versions, which helps, but two things fix the root cause (both
-already applied here):
-
-1. `cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)` — only the newest frame is kept, so
-   the feed can't fall further and further behind.
-2. `config.PHONE_DETECT_EVERY_N_FRAMES` — phone detection only runs every
-   Nth frame (default 3), reusing the last result in between. EAR/MAR still
-   run every frame since they're cheap. A phone held up to the camera stays
-   in view for many frames, so this doesn't hurt detection reliability —
-   only how many frames it takes to notice.
-
-If the feed still lags on the QA machine, raise `PHONE_DETECT_EVERY_N_FRAMES`
-or lower `PHONE_IMG_SIZE` (e.g. 480) in `config.py`.
