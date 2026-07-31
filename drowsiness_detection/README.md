@@ -16,12 +16,20 @@ drowsiness_detection/
 └── drowsy_detect/
     ├── __init__.py
     ├── config.py               # all tunable constants
-    ├── ear.py                  # EAR math
-    ├── audio.py                # pygame beep alert (non-blocking)
+    ├── ear.py                  # EAR math (eyes → drowsiness)
+    ├── mar.py                  # MAR math (mouth → yawning)
+    ├── audio.py                # pygame beep alerts (non-blocking, distinct tones)
     ├── display.py              # ffplay pipe-based display
     ├── keyboard_input.py       # non-blocking single-key reader
-    └── detector.py             # main capture/inference/alert loop
+    └── detector.py             # main capture/inference/alert loop (checks both)
 ```
+
+Detects two things simultaneously from the same face landmarks each frame:
+- **Drowsiness** — sustained low EAR (eyes closed) → two-tone alert
+- **Yawning** — sustained high MAR (mouth wide open) → single lower-tone alert
+
+Both run independently with their own counters, thresholds, and cooldowns
+(see `config.py`), so a yawn won't reset the drowsiness counter or vice versa.
 
 Run everything from **this** directory — `main.py` must sit next to
 `drowsy_detect/` for the import in `main.py` to resolve.
@@ -71,8 +79,11 @@ Keyboard controls while running (in the terminal running the script):
 
 Adjust detection sensitivity in `drowsy_detect/config.py`:
 - `EAR_THRESHOLD` — eye-closed threshold (lower = more closed)
-- `CONSEC_FRAMES` — consecutive below-threshold frames before alert
-- `ALERT_COOLDOWN_SEC` — minimum seconds between repeated alerts
+- `CONSEC_FRAMES` — consecutive below-threshold frames before drowsiness alert
+- `ALERT_COOLDOWN_SEC` — minimum seconds between repeated drowsiness alerts
+- `MAR_THRESHOLD` — mouth-open threshold above which counts as "open"
+- `YAWN_CONSEC_FRAMES` — consecutive above-threshold frames before yawn alert
+- `YAWN_COOLDOWN_SEC` — minimum seconds between repeated yawn alerts
 
 ## Known fixes applied
 

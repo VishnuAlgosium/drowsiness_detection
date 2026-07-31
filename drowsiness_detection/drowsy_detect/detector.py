@@ -12,8 +12,9 @@ import time
 import cv2
 
 from . import config
-from .audio import play_alert, shutdown_audio, AUDIO_AVAILABLE
+from .audio import play_alert, play_yawn_alert, shutdown_audio, AUDIO_AVAILABLE
 from .ear import average_ear
+from .mar import mouth_aspect_ratio
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
 
@@ -80,6 +81,10 @@ def run() -> None:
     alert_count = 0
     last_alert = 0.0
 
+    yawn_counter = 0
+    yawn_count = 0
+    last_yawn_alert = 0.0
+
     print()
     print("[INFO] Running")
     print("[INFO] Keys: v = toggle display, q = quit")
@@ -102,23 +107,38 @@ def run() -> None:
             results = face_mesh.detect_for_video(mp_image, timestamp_ms)
 
             current_ear = 0.0
+            current_mar = 0.0
 
             if results.face_landmarks:
                 landmarks = results.face_landmarks[0]
+
                 current_ear = average_ear(
                     landmarks, config.LEFT_EYE_IDX, config.RIGHT_EYE_IDX, w, h
+                )
+
+                current_mar = mouth_aspect_ratio(
+                    landmarks,
+                    config.MOUTH_TOP, config.MOUTH_BOTTOM,
+                    config.MOUTH_LEFT, config.MOUTH_RIGHT,
+                    w, h,
                 )
 
                 if current_ear < config.EAR_THRESHOLD:
                     counter += 1
                 else:
                     counter = max(0, counter - 1)
+
+                if current_mar > config.MAR_THRESHOLD:
+                    yawn_counter += 1
+                else:
+                    yawn_counter = max(0, yawn_counter - 1)
             else:
                 counter = max(0, counter - 1)
+                yawn_counter = max(0, yawn_counter - 1)
 
-            # ── Drowsiness alert ──
             now = time.time()
 
+            # ── Drowsiness alert (eyes) ──
             if counter >= config.CONSEC_FRAMES:
                 if now - last_alert > config.ALERT_COOLDOWN_SEC:
                     alert_count += 1
@@ -126,18 +146,34 @@ def run() -> None:
                     play_alert()
                     last_alert = now
 
+            # ── Yawn alert (mouth) ──
+            if yawn_counter >= config.YAWN_CONSEC_FRAMES:
+                if now - last_yawn_alert > config.YAWN_COOLDOWN_SEC:
+                    yawn_count += 1
+                    print(f"[YAWN #{yawn_count}] Yawn detected MAR={current_mar:.3f}")
+                    play_yawn_alert()
+                    last_yawn_alert = now
+
             # ── Display ──
             if display_on:
-                text = (
-                    f"EAR: {current_ear:.3f} "
-                    f"Counter: {counter}/{config.CONSEC_FRAMES} "
-                    f"Alerts:{alert_count}"
-                )
+                is_drowsy = counter >= config.CONSEC_FRAMES
+                is_yawning = yawn_counter >= config.YAWN_CONSEC_FRAMES
 
-                color = (0, 0, 255) if counter >= config.CONSEC_FRAMES else (0, 255, 0)
+                GREEN = (0, 255, 0)
+                ORANGE = (0, 165, 255)   # drowsiness alert color
+                RED = (0, 0, 255)        # yawn alert color (used only for yawn)
+
+                ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
+                mar_text = f"MAR: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
+
+                ear_color = ORANGE if is_drowsy else GREEN
+                mar_color = RED if is_yawning else GREEN
 
                 cv2.putText(
-                    frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                    frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ear_color, 2
+                )
+                cv2.putText(
+                    frame, mar_text, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, mar_color, 2
                 )
 
                 frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
@@ -169,4 +205,4 @@ def run() -> None:
         cap.release()
         shutdown_audio()
 
-    print(f"[INFO] Session ended. Alerts: {alert_count}")
+    print(f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}")

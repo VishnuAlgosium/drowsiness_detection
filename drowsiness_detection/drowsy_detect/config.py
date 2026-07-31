@@ -29,8 +29,23 @@ def apply_cpu_settings() -> None:
 # ─────────────────────────────────────────────
 
 EAR_THRESHOLD = 0.25
-CONSEC_FRAMES = 15
+CONSEC_FRAMES = 20
 ALERT_COOLDOWN_SEC = 4.0
+
+# ─────────────────────────────────────────────
+# Yawn detection thresholds (Mouth Aspect Ratio)
+# ─────────────────────────────────────────────
+
+MAR_THRESHOLD = 0.6          # mouth-open ratio above which counts as "open"
+YAWN_CONSEC_FRAMES = 20      # ~0.6-0.7s at 30fps held open before it's a yawn
+YAWN_COOLDOWN_SEC = 4.0
+
+# MediaPipe face mesh mouth landmark indices:
+# top inner lip, bottom inner lip, left corner, right corner
+MOUTH_TOP = 13
+MOUTH_BOTTOM = 14
+MOUTH_LEFT = 78
+MOUTH_RIGHT = 308
 
 # ─────────────────────────────────────────────
 # Display defaults
