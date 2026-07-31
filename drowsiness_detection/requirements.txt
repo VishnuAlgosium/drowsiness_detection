@@ -1,6 +1,13 @@
-# Pinned to the versions verified working on the Raspberry Pi (Python 3.13.5)
+# Drowsiness Detection
 opencv-python==5.0.0.93
 numpy==2.5.1
 mediapipe==1.0.0
 scipy==1.18.0
 pygame==2.6.1
+
+
+# Phone Detection
+ultralytics
+ncnn
+torch
+

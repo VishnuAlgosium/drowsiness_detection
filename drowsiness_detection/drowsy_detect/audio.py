@@ -1,7 +1,11 @@
 """
 audio.py
 --------
-Pygame-based beep alert used when drowsiness is detected.
+Pygame-based beep alerts. Each detector gets its own distinct tone so an
+alert can be identified by ear alone:
+    drowsiness -> two-tone, low-pitched
+    yawn       -> single, low-pitched
+    phone      -> triple, high-pitched
 """
 
 import numpy as np
@@ -65,6 +69,14 @@ def play_alert() -> None:
 def play_yawn_alert() -> None:
     """Distinct single, lower-pitched tone used for yawn detection."""
     seq = _beep(440, 0.35, vol=0.5)
+    _play_sequence(seq)
+
+
+def play_phone_alert() -> None:
+    """Distinct triple, higher-pitched tone used for phone-use detection."""
+    silence = np.zeros(int(44100 * 0.08), dtype=np.int16)
+    beep = _beep(1200, 0.15, vol=0.5)
+    seq = np.concatenate([beep, silence, beep, silence, beep])
     _play_sequence(seq)
 
 
