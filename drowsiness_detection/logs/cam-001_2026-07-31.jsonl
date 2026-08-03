@@ -1,9 +1,0 @@
-{"event_id": "3710c2b0-37d5-49ee-b366-a169294320c9", "timestamp": "2026-07-31T07:15:13.445978Z", "event_type": "drowsiness_detected", "ear": 0.09799999743700027}
-{"event_id": "9033072c-23aa-42a6-8a1e-f854eef11751", "timestamp": "2026-07-31T07:15:17.472258Z", "event_type": "drowsiness_detected", "ear": 0.289000004529953}
-{"event_id": "058f90b5-9e80-450f-892d-7318024c9186", "timestamp": "2026-07-31T07:15:21.495540Z", "event_type": "drowsiness_detected", "ear": 0.03200000151991844}
-{"event_id": "c8cb1afe-0f80-4016-8cff-128952c44176", "timestamp": "2026-07-31T07:15:25.544083Z", "event_type": "drowsiness_detected", "ear": 0.2939999997615814}
-{"event_id": "4e28b499-40e7-4d3a-8e54-a92efd9a8e4a", "timestamp": "2026-07-31T07:15:26.339488Z", "event_type": "phone_detected", "confidence": 0.53, "frames_confirmed": "3/5"}
-{"event_id": "f4848432-9e7a-4d85-b7cb-24bce503c216", "timestamp": "2026-07-31T07:15:33.323499Z", "event_type": "phone_detected", "confidence": 0.531, "frames_confirmed": "3/5"}
-{"event_id": "66f2b72a-1ffe-4b23-bf36-7c6b3ff7db91", "timestamp": "2026-07-31T07:15:39.512075Z", "event_type": "yawn_detected", "mar": 1.071}
-{"event_id": "00a76698-de83-4bfa-b8c3-a899d93a7812", "timestamp": "2026-07-31T07:15:43.532012Z", "event_type": "yawn_detected", "mar": 0.874}
-{"event_id": "2124b263-6732-41d7-b62c-2e3de790b65d", "timestamp": "2026-07-31T07:15:43.973923Z", "event_type": "drowsiness_detected", "ear": 0.24300000071525574}
