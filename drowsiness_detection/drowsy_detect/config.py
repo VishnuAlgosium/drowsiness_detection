@@ -11,7 +11,6 @@ import os
 # CPU / threading
 # ─────────────────────────────────────────────
 
-# Force CPU-only execution (no CUDA) and cap OpenCV/OMP thread usage.
 CUDA_VISIBLE_DEVICES = "-1"
 OMP_NUM_THREADS = "4"
 OPENCV_NUM_THREADS = 4
@@ -25,20 +24,44 @@ def apply_cpu_settings() -> None:
 
 
 # ─────────────────────────────────────────────
-# Drowsiness detection thresholds (Eye Aspect Ratio)
+# Drowsiness detection (Eye Aspect Ratio)
 # ─────────────────────────────────────────────
 
 EAR_THRESHOLD = 0.25
 CONSEC_FRAMES = 20
 ALERT_COOLDOWN_SEC = 4.0
 
+# Startup calibration: baseline_ear * EAR_THRESHOLD_RATIO replaces the fixed
+# threshold above, so eye shape doesn't need one global cutoff. 0 = skip.
+EAR_CALIBRATION_FRAMES = 60
+EAR_THRESHOLD_RATIO = 0.75
+
+# EMA smoothing factor for EAR (lower = smoother, damps rubbing/occlusion noise).
+EAR_SMOOTHING_ALPHA = 0.4
+
+# Max |left_ear - right_ear| to still count as "both eyes closed" (rejects winks).
+EAR_ASYMMETRY_MAX = 0.12
+
+# Consecutive no-face frames tolerated before counters start decaying.
+NO_FACE_GRACE_FRAMES = 5
+
 # ─────────────────────────────────────────────
-# Yawn detection thresholds (Mouth Aspect Ratio)
+# Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
 MAR_THRESHOLD = 0.6          # mouth-open ratio above which counts as "open"
 YAWN_CONSEC_FRAMES = 20      # ~0.6-0.7s at 30fps held open before it's a yawn
 YAWN_COOLDOWN_SEC = 4.0
+
+# Looser threshold for small/suppressed yawns, held longer to compensate.
+MAR_LOW_THRESHOLD = 0.45
+MAR_LOW_CONSEC_FRAMES = 35
+
+# Oscillation filter: a yawn is one open->hold->close; talking/laughing/
+# singing repeatedly opens and closes. Reject if rising edges exceed this
+# within the trailing window.
+YAWN_TRANSITION_WINDOW = 30
+YAWN_MAX_TRANSITIONS = 1
 
 # MediaPipe face mesh mouth landmark indices:
 # top inner lip, bottom inner lip, left corner, right corner
@@ -48,15 +71,13 @@ MOUTH_LEFT = 78
 MOUTH_RIGHT = 308
 
 # ─────────────────────────────────────────────
-# Phone-use detection thresholds (YOLO ONNX)
+# Phone-use detection (YOLO ONNX)
 # ─────────────────────────────────────────────
 
 PHONE_DETECTION_ENABLED = True
 
 # Ultralytics loads an NCNN export by pointing at the exported model folder
 # (the one containing model.ncnn.param / model.ncnn.bin), not a single file.
-# NCNN is CPU-optimized and generally faster than ONNXRuntime here, which
-# helps the lag issue further on top of PHONE_DETECT_EVERY_N_FRAMES below.
 PHONE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "models",
@@ -69,13 +90,25 @@ PHONE_CONFIRM_FRAMES = 3
 PHONE_CONFIRM_WINDOW = 5
 PHONE_COOLDOWN_SEC = 5.0
 
-# YOLO inference is much heavier per-frame than the MediaPipe face landmarker.
-# Running it on every frame is what makes the video feed lag behind real time.
-# Running it every Nth frame instead keeps the capture/display loop fast; a
-# phone held up to the camera stays in view for many frames in a row, so the
-# confirmation buffer still fills reliably. Lower this for faster detection
-# at the cost of more CPU, raise it if the feed still lags.
+# YOLO on CPU is heavy; run it every Nth frame to keep the capture/display
+# loop from lagging. A held-up phone stays in view long enough to still
+# fill the confirmation buffer.
 PHONE_DETECT_EVERY_N_FRAMES = 3
+
+# Low-confidence tier for occluded/edge-on/calling-position views, needs a
+# longer sustained window since a single low-confidence frame is unreliable.
+PHONE_LOW_CONF_THRESHOLD = 0.30
+PHONE_LOW_CONF_WINDOW = 10
+PHONE_LOW_CONF_FRAMES = 7
+
+# Shape gate: box must look roughly phone-proportioned (~2:1, portrait or
+# landscape), filters out other dark handheld objects.
+PHONE_MIN_ASPECT = 1.5
+PHONE_MAX_ASPECT = 3.0
+
+# Black border added before inference so edge-clipped phones aren't
+# penalized for looking incomplete.
+PHONE_EDGE_PAD_PX = 60
 
 # ─────────────────────────────────────────────
 # Display defaults

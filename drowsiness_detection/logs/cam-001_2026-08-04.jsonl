@@ -1,0 +1,128 @@
+{"event_id": "e7979330-220a-4f9c-8a30-b76f9d4c0617", "timestamp": "2026-08-04T04:26:01.470064Z", "event_type": "drowsiness_detected", "ear": 0.04100000113248825, "trigger": "microsleep_fast_path"}
+{"event_id": "14b8e1ce-d16e-4a7d-9aae-a893502ce2c4", "timestamp": "2026-08-04T04:26:01.501896Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "971e0c92-67bc-4a5a-81af-f7be99eca26a", "timestamp": "2026-08-04T04:26:07.532840Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "223ad2ea-497e-4c16-ba2e-2853df6f4778", "timestamp": "2026-08-04T04:26:08.234331Z", "event_type": "drowsiness_detected", "ear": 0.09099999815225601, "trigger": "microsleep_fast_path"}
+{"event_id": "1def4df4-821c-49e7-a425-89755727eaeb", "timestamp": "2026-08-04T04:26:13.542084Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "c94439ed-5edf-455f-a362-f0981dd39fff", "timestamp": "2026-08-04T04:26:19.561241Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "f99e4d3a-91a2-476e-960b-9cb54ec35be1", "timestamp": "2026-08-04T04:26:25.578866Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "fc4eacf5-3f03-44ac-a53b-34b40106e5b7", "timestamp": "2026-08-04T04:26:31.634438Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "f387a857-a39a-4081-bcc4-affa47c88ab9", "timestamp": "2026-08-04T04:26:37.652599Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "377b4161-5af7-464b-93b4-43408de0bf9c", "timestamp": "2026-08-04T04:26:43.674120Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "1547c513-1c26-49c5-847e-b88aaa74cfcc", "timestamp": "2026-08-04T04:26:49.726683Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "fbf10480-cdbb-47a5-a79a-99fe4fb6072a", "timestamp": "2026-08-04T04:26:55.742912Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "3989cc55-6914-4a1a-a13f-7fc981586b6d", "timestamp": "2026-08-04T04:26:56.945456Z", "event_type": "drowsiness_detected", "ear": 0.07000000029802322, "trigger": "microsleep_fast_path"}
+{"event_id": "72afd92d-9a4b-46ba-b50b-a10190ebfc1e", "timestamp": "2026-08-04T04:27:01.756753Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "65529448-606f-4d15-8614-6d9fe70a4be7", "timestamp": "2026-08-04T04:27:04.526228Z", "event_type": "drowsiness_detected", "ear": 0.2939999997615814, "trigger": "microsleep_fast_path"}
+{"event_id": "62ed500c-1490-44c4-9bef-240fcc93ddc1", "timestamp": "2026-08-04T04:27:07.762787Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "2cd7678d-26fa-4525-9aa1-211c1ca5a0d1", "timestamp": "2026-08-04T04:27:08.587039Z", "event_type": "drowsiness_detected", "ear": 0.6899999976158142, "trigger": "microsleep_fast_path"}
+{"event_id": "fcc540fa-fda6-475f-bd87-5080f6832c8d", "timestamp": "2026-08-04T04:27:13.773904Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "55f4ae79-c089-4689-b3aa-ee85329a88d1", "timestamp": "2026-08-04T04:27:19.789317Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "4ce85c32-77ea-462d-aa91-ab2fc011c56f", "timestamp": "2026-08-04T04:27:25.793274Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "77bfa8e4-d92a-4c35-850d-27babab99af0", "timestamp": "2026-08-04T04:27:31.831405Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "a2e8c0c4-5fdb-4425-8508-15bdc55728a4", "timestamp": "2026-08-04T04:27:37.850351Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "c772a902-a8d3-493b-83c2-f89c81d5b9b1", "timestamp": "2026-08-04T04:27:43.902486Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "7ee0b325-fce7-49b5-a83f-1b112cc40d3d", "timestamp": "2026-08-04T04:27:45.366321Z", "event_type": "drowsiness_detected", "ear": 0.11100000143051147, "trigger": "microsleep_fast_path"}
+{"event_id": "083d4e9c-1aa5-485e-b8ac-16d712579879", "timestamp": "2026-08-04T04:27:49.919286Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "39b630a6-03a8-49c4-9900-cca339763e06", "timestamp": "2026-08-04T04:27:50.125026Z", "event_type": "drowsiness_detected", "ear": 0.10300000011920929, "trigger": "microsleep_fast_path"}
+{"event_id": "0068597a-f47e-4ceb-9ae0-c792c1feb376", "timestamp": "2026-08-04T04:27:55.941023Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "1eafc049-0344-410c-9b9b-fd240d3389dd", "timestamp": "2026-08-04T04:27:58.437965Z", "event_type": "drowsiness_detected", "ear": 0.05900000035762787, "trigger": "microsleep_fast_path"}
+{"event_id": "b9aadf9b-8c4c-45fd-8741-daf10ab2ef88", "timestamp": "2026-08-04T04:28:01.990839Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "9734711d-6bab-4b79-b1da-a17dcee0f8ef", "timestamp": "2026-08-04T04:28:02.628423Z", "event_type": "drowsiness_detected", "ear": 0.10100000351667404, "trigger": "microsleep_fast_path"}
+{"event_id": "6ec21e78-71b4-4c26-952e-80d93b8e8821", "timestamp": "2026-08-04T04:28:08.016463Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "3d40c856-591a-43f1-b829-5ccf510d108c", "timestamp": "2026-08-04T04:28:19.254406Z", "event_type": "drowsiness_detected", "ear": 0.009999999776482582, "trigger": "microsleep_fast_path"}
+{"event_id": "264c4759-cfc8-48a0-8da0-109e024c49fd", "timestamp": "2026-08-04T04:28:21.387659Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "7e8b4d02-0317-4e25-a0ed-c5c23fe7b8f9", "timestamp": "2026-08-04T04:28:23.681440Z", "event_type": "drowsiness_detected", "ear": 0.10599999874830246, "trigger": "microsleep_fast_path"}
+{"event_id": "74966b6e-2088-46ea-98d9-63fe7fdf1777", "timestamp": "2026-08-04T04:32:36.449224Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "a715b3b4-0df0-40b6-8545-d9a640cdbca5", "timestamp": "2026-08-04T04:32:38.858632Z", "event_type": "drowsiness_detected", "ear": 0.03999999910593033, "trigger": "microsleep_fast_path"}
+{"event_id": "8db06f79-c6c8-4477-a720-631530bcadb7", "timestamp": "2026-08-04T04:32:42.500282Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "beb060a9-250b-4e88-a67c-eb62e5a029ba", "timestamp": "2026-08-04T04:32:48.322443Z", "event_type": "drowsiness_detected", "ear": 0.028999999165534973, "trigger": "microsleep_fast_path"}
+{"event_id": "b94f5074-595f-4d04-b117-a727ddce293e", "timestamp": "2026-08-04T04:32:48.520217Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "71041af4-cb9b-44a6-a6da-c0fdd1a1d911", "timestamp": "2026-08-04T04:32:52.347251Z", "event_type": "drowsiness_detected", "ear": 0.0430000014603138, "trigger": "sustained_closure"}
+{"event_id": "e2e34d14-ce49-4961-9e7b-c1308ce381a2", "timestamp": "2026-08-04T04:32:54.550331Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "2c7ead9e-e96a-44d1-8cc3-161cd4bb173d", "timestamp": "2026-08-04T04:32:56.369845Z", "event_type": "drowsiness_detected", "ear": 0.1379999965429306, "trigger": "sustained_closure"}
+{"event_id": "2dd28893-ba03-4ad3-8336-3cdfaff4284e", "timestamp": "2026-08-04T04:33:00.378929Z", "event_type": "drowsiness_detected", "ear": 0.05400000140070915, "trigger": "sustained_closure"}
+{"event_id": "6ee6df17-ea7d-4f73-b029-5751d41963aa", "timestamp": "2026-08-04T04:33:00.592178Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "28a8b6f7-5c5a-4d85-bf72-399b4ad57e36", "timestamp": "2026-08-04T04:33:04.386474Z", "event_type": "drowsiness_detected", "ear": 0.3050000071525574, "trigger": "sustained_closure"}
+{"event_id": "ae620e7e-a082-4271-9df9-0aba87afd455", "timestamp": "2026-08-04T04:33:06.615009Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "4343f991-0f7d-41ac-8a9d-9eab3c5fbf1b", "timestamp": "2026-08-04T04:33:08.405940Z", "event_type": "drowsiness_detected", "ear": 0.04800000041723251, "trigger": "sustained_closure"}
+{"event_id": "e9bec61e-07d5-4466-b1b2-6d2414a5d516", "timestamp": "2026-08-04T04:33:12.432695Z", "event_type": "drowsiness_detected", "ear": 0.06400000303983688, "trigger": "sustained_closure"}
+{"event_id": "48ce16ed-1faf-4b12-bccf-13cee68450e3", "timestamp": "2026-08-04T04:33:16.457918Z", "event_type": "drowsiness_detected", "ear": 0.24799999594688416, "trigger": "sustained_closure"}
+{"event_id": "08e2c1f1-2d0f-4329-950b-137a01f072cd", "timestamp": "2026-08-04T04:33:20.478888Z", "event_type": "drowsiness_detected", "ear": 0.3160000145435333, "trigger": "sustained_closure"}
+{"event_id": "80ee53d2-2b36-430f-ba85-540f968eee36", "timestamp": "2026-08-04T04:33:24.441472Z", "event_type": "phone_detected", "confidence": 0.621, "frames_confirmed": "3/5", "frames_confirmed_low_conf": "3/10"}
+{"event_id": "b866528a-083e-460a-8c49-265407e5b0b7", "timestamp": "2026-08-04T04:33:24.503716Z", "event_type": "drowsiness_detected", "ear": 0.2849999964237213, "trigger": "sustained_closure"}
+{"event_id": "63a163ed-dc19-436a-b802-e3288c0d1a05", "timestamp": "2026-08-04T04:33:28.528786Z", "event_type": "drowsiness_detected", "ear": 0.2240000069141388, "trigger": "sustained_closure"}
+{"event_id": "93e82cff-662b-4d4f-892b-704e0b09b158", "timestamp": "2026-08-04T04:33:30.993273Z", "event_type": "phone_detected", "confidence": 0.519, "frames_confirmed": "3/5", "frames_confirmed_low_conf": "3/10"}
+{"event_id": "b166301f-d81d-4ca8-9cbd-81add4150bc8", "timestamp": "2026-08-04T04:33:32.553453Z", "event_type": "drowsiness_detected", "ear": 0.24699999392032623, "trigger": "sustained_closure"}
+{"event_id": "17e45f1b-64c0-4b9e-ad05-ad957e0fde95", "timestamp": "2026-08-04T04:33:36.576778Z", "event_type": "drowsiness_detected", "ear": 0.23999999463558197, "trigger": "sustained_closure"}
+{"event_id": "c4c6e41d-e950-43b7-a59b-6d6e49a9b40d", "timestamp": "2026-08-04T04:33:40.603116Z", "event_type": "drowsiness_detected", "ear": 0.0729999989271164, "trigger": "sustained_closure"}
+{"event_id": "5c0ebf66-2076-4d46-81dd-33e908aaeec3", "timestamp": "2026-08-04T04:33:44.663224Z", "event_type": "drowsiness_detected", "ear": 0.12300000339746475, "trigger": "sustained_closure"}
+{"event_id": "d4549204-4873-4ec9-93fb-219cb39f0ff1", "timestamp": "2026-08-04T04:33:48.691943Z", "event_type": "drowsiness_detected", "ear": 0.19300000369548798, "trigger": "sustained_closure"}
+{"event_id": "ee4ad01a-5ee8-4618-b8af-6f4fc08dd99c", "timestamp": "2026-08-04T04:33:52.711132Z", "event_type": "drowsiness_detected", "ear": 0.18199999630451202, "trigger": "sustained_closure"}
+{"event_id": "2de317c1-bfc2-4048-913e-419afe30dbd4", "timestamp": "2026-08-04T04:33:56.764024Z", "event_type": "drowsiness_detected", "ear": 0.0, "trigger": "sustained_closure"}
+{"event_id": "314e4543-8784-452b-9058-4e17b3fb4c7e", "timestamp": "2026-08-04T04:33:59.323975Z", "event_type": "phone_detected", "confidence": 0.579, "frames_confirmed": "3/5", "frames_confirmed_low_conf": "3/10"}
+{"event_id": "37b8ed79-e327-44a0-b287-2e225c17e7f0", "timestamp": "2026-08-04T04:34:00.789404Z", "event_type": "drowsiness_detected", "ear": 0.3100000023841858, "trigger": "sustained_closure"}
+{"event_id": "1c3f616a-4fa6-4756-9824-21a9e52b78b4", "timestamp": "2026-08-04T04:34:04.813895Z", "event_type": "drowsiness_detected", "ear": 0.11500000208616257, "trigger": "sustained_closure"}
+{"event_id": "ae7dddf6-4dfd-4db9-befb-4be9d4e9762b", "timestamp": "2026-08-04T04:34:08.837236Z", "event_type": "drowsiness_detected", "ear": 0.2809999883174896, "trigger": "sustained_closure"}
+{"event_id": "cfd2877e-d65a-4b2b-9d52-149ee66c7fa6", "timestamp": "2026-08-04T04:34:12.861287Z", "event_type": "drowsiness_detected", "ear": 0.28200000524520874, "trigger": "sustained_closure"}
+{"event_id": "44308fda-8d92-49dd-88ae-dc55215d654f", "timestamp": "2026-08-04T04:34:16.881932Z", "event_type": "drowsiness_detected", "ear": 0.2329999953508377, "trigger": "sustained_closure"}
+{"event_id": "6eabb404-8cc3-421f-b3ce-1fd674a5d675", "timestamp": "2026-08-04T04:34:20.908714Z", "event_type": "drowsiness_detected", "ear": 0.20499999821186066, "trigger": "sustained_closure"}
+{"event_id": "43e023d2-0f22-40c5-945d-eda018378c89", "timestamp": "2026-08-04T04:34:24.936039Z", "event_type": "drowsiness_detected", "ear": 0.07000000029802322, "trigger": "sustained_closure"}
+{"event_id": "787760f5-54e9-4f92-aa8b-fa41d1010ac7", "timestamp": "2026-08-04T04:34:28.941068Z", "event_type": "drowsiness_detected", "ear": 0.2290000021457672, "trigger": "sustained_closure"}
+{"event_id": "e63561b6-aef8-4faa-9c98-0e70748fb298", "timestamp": "2026-08-04T04:34:32.953941Z", "event_type": "drowsiness_detected", "ear": 0.2759999930858612, "trigger": "sustained_closure"}
+{"event_id": "f725c5ce-c76b-4d5c-9571-a2b5d42a9d41", "timestamp": "2026-08-04T04:34:33.082561Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "c4b4eeaa-f862-45b1-bdbe-77b557ed75ab", "timestamp": "2026-08-04T04:34:36.970806Z", "event_type": "drowsiness_detected", "ear": 0.30000001192092896, "trigger": "sustained_closure"}
+{"event_id": "18860c95-4521-470a-b6ef-473ca781d09c", "timestamp": "2026-08-04T04:34:39.101477Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "52e894f1-7841-460d-8bc2-794a52c05e12", "timestamp": "2026-08-04T04:34:40.996620Z", "event_type": "drowsiness_detected", "ear": 0.25099998712539673, "trigger": "sustained_closure"}
+{"event_id": "de109909-a945-4bef-b711-15b3d6886f3b", "timestamp": "2026-08-04T04:34:45.122104Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "d1170f31-71b9-4445-9e48-e719222be70f", "timestamp": "2026-08-04T04:34:47.293714Z", "event_type": "drowsiness_detected", "ear": 0.10000000149011612, "trigger": "microsleep_fast_path"}
+{"event_id": "e5f53712-239a-4b28-9859-64b086bce8f1", "timestamp": "2026-08-04T04:34:51.174184Z", "event_type": "distraction_lookdown_detected"}
+{"event_id": "07622caa-7c6b-4173-a2f2-4cad375e7afe", "timestamp": "2026-08-04T04:34:51.309566Z", "event_type": "drowsiness_detected", "ear": 0.1509999930858612, "trigger": "sustained_closure"}
+{"event_id": "46fe5c8f-d5b1-4ae0-85f0-0e8750ae0b44", "timestamp": "2026-08-04T04:34:55.335575Z", "event_type": "drowsiness_detected", "ear": 0.3319999873638153, "trigger": "sustained_closure"}
+{"event_id": "c768691d-2445-4e72-aba7-d006777c3d06", "timestamp": "2026-08-04T04:34:59.364253Z", "event_type": "drowsiness_detected", "ear": 0.10300000011920929, "trigger": "sustained_closure"}
+{"event_id": "693ded9a-e995-49b1-8a8b-3eb8f5dccbfa", "timestamp": "2026-08-04T04:35:03.385990Z", "event_type": "drowsiness_detected", "ear": 0.1080000028014183, "trigger": "sustained_closure"}
+{"event_id": "61793a73-f507-42ce-ad52-7c45c1409662", "timestamp": "2026-08-04T04:35:07.405145Z", "event_type": "drowsiness_detected", "ear": 0.11500000208616257, "trigger": "sustained_closure"}
+{"event_id": "72a9c032-fa18-480a-b77c-4f16039aa487", "timestamp": "2026-08-04T04:35:11.463247Z", "event_type": "drowsiness_detected", "ear": 0.0, "trigger": "sustained_closure"}
+{"event_id": "f21643fa-ecea-4d92-b24b-b1b71526ed68", "timestamp": "2026-08-04T04:35:15.486928Z", "event_type": "drowsiness_detected", "ear": 0.3240000009536743, "trigger": "sustained_closure"}
+{"event_id": "b43d37c8-0a79-4c4a-9788-deee282634c1", "timestamp": "2026-08-04T04:35:19.510113Z", "event_type": "drowsiness_detected", "ear": 0.2879999876022339, "trigger": "sustained_closure"}
+{"event_id": "ec86cbde-737e-4b4f-aafb-7bc034d4ea3a", "timestamp": "2026-08-04T04:35:28.657398Z", "event_type": "drowsiness_detected", "ear": 0.03700000047683716, "trigger": "sustained_closure"}
+{"event_id": "85b68256-d0df-44d4-acb2-0b3b47d3a770", "timestamp": "2026-08-04T04:35:32.978689Z", "event_type": "drowsiness_detected", "ear": 0.2029999941587448, "trigger": "sustained_closure"}
+{"event_id": "a7c4e883-90a9-430d-8865-801b6d379127", "timestamp": "2026-08-04T04:35:37.016924Z", "event_type": "drowsiness_detected", "ear": 0.2639999985694885, "trigger": "sustained_closure"}
+{"event_id": "10dbdfc4-c390-4772-81a7-c1d2120b6d91", "timestamp": "2026-08-04T04:35:39.665730Z", "event_type": "phone_detected", "confidence": 0.526, "frames_confirmed": "3/5", "frames_confirmed_low_conf": "6/10"}
+{"event_id": "e1ca3fc2-3783-4c17-89eb-2fa09fe22aba", "timestamp": "2026-08-04T04:40:34.668249Z", "event_type": "drowsiness_detected", "ear": 0.05999999865889549, "trigger": "microsleep_fast_path"}
+{"event_id": "80c615b8-d60f-4823-b47c-06674568d2e2", "timestamp": "2026-08-04T04:40:39.125169Z", "event_type": "drowsiness_detected", "ear": 0.05400000140070915, "trigger": "microsleep_fast_path"}
+{"event_id": "d98d7942-a90b-420e-88a1-88987917ab83", "timestamp": "2026-08-04T04:40:43.161954Z", "event_type": "drowsiness_detected", "ear": 0.06300000101327896, "trigger": "microsleep_fast_path"}
+{"event_id": "e8970963-1b26-4bdb-8b1a-7217b9e385ee", "timestamp": "2026-08-04T04:40:48.402673Z", "event_type": "yawn_detected", "mar": 0.79}
+{"event_id": "43fdf255-8e40-4564-b32c-f4c55499d5db", "timestamp": "2026-08-04T04:40:58.085987Z", "event_type": "yawn_detected", "mar": 0.875}
+{"event_id": "4715c14f-75b8-437f-ab56-0ec77a473b8a", "timestamp": "2026-08-04T04:41:05.410981Z", "event_type": "yawn_detected", "mar": 0.634}
+{"event_id": "730df47b-2142-45a6-a452-449c9af77a7b", "timestamp": "2026-08-04T04:41:10.989091Z", "event_type": "phone_detected", "confidence": 0.554, "frames_confirmed": "3/5", "frames_confirmed_low_conf": "6/10"}
+{"event_id": "5a7fbbdc-8c72-4d62-86b0-dd6b2429b5e0", "timestamp": "2026-08-04T04:41:19.900480Z", "event_type": "phone_detected", "confidence": 0.353, "frames_confirmed": "0/5", "frames_confirmed_low_conf": "7/10"}
+{"event_id": "c8fbf9bd-c10e-446a-8685-7dd0840cde26", "timestamp": "2026-08-04T04:41:20.208189Z", "event_type": "yawn_detected", "mar": 0.621}
+{"event_id": "bc985319-c5f4-4122-837a-4dea7843541e", "timestamp": "2026-08-04T04:41:27.747824Z", "event_type": "phone_detected", "confidence": 0.346, "frames_confirmed": "0/5", "frames_confirmed_low_conf": "7/10"}
+{"event_id": "a3f7c331-5bda-4a3d-883e-367bdbffc1fc", "timestamp": "2026-08-04T04:41:40.684952Z", "event_type": "drowsiness_detected", "ear": 0.13300000131130219, "trigger": "microsleep_fast_path"}
+{"event_id": "4c694f15-668f-4a1e-bbd8-a19b60b46322", "timestamp": "2026-08-04T04:42:41.585476Z", "event_type": "phone_detected", "confidence": 0.336, "frames_confirmed": "0/5", "frames_confirmed_low_conf": "7/10"}
+{"event_id": "128ddc40-67f4-4c0b-9e49-2d2043b31181", "timestamp": "2026-08-04T04:45:03.999185Z", "event_type": "drowsiness_detected", "ear": 0.014000000432133675, "trigger": "microsleep_fast_path"}
+{"event_id": "c87f4eb6-5039-442e-8465-aedea4864df2", "timestamp": "2026-08-04T04:45:08.023667Z", "event_type": "drowsiness_detected", "ear": 0.013000000268220901, "trigger": "sustained_closure"}
+{"event_id": "7f3609f4-7cfb-47db-a8e7-6b465a472d6d", "timestamp": "2026-08-04T04:45:12.048080Z", "event_type": "drowsiness_detected", "ear": 0.017000000923871994, "trigger": "sustained_closure"}
+{"event_id": "f955d292-fa96-4087-9e35-63def2e35829", "timestamp": "2026-08-04T04:45:15.541834Z", "event_type": "yawn_detected", "mar": 0.631}
+{"event_id": "a512a2b0-ee06-4f82-9cda-7c6e119365f8", "timestamp": "2026-08-04T04:45:16.056250Z", "event_type": "drowsiness_detected", "ear": 0.3089999854564667, "trigger": "sustained_closure"}
+{"event_id": "ddedf6aa-cdc3-4e91-afb5-faed29c643d9", "timestamp": "2026-08-04T04:45:20.064314Z", "event_type": "drowsiness_detected", "ear": 0.014000000432133675, "trigger": "sustained_closure"}
+{"event_id": "6caabebf-fb84-4cc7-ac62-442a06f2a245", "timestamp": "2026-08-04T04:45:23.356550Z", "event_type": "yawn_detected", "mar": 0.652}
+{"event_id": "b88220f4-3289-42ec-8bc3-bd4652a12966", "timestamp": "2026-08-04T04:45:28.645472Z", "event_type": "drowsiness_detected", "ear": 0.22699999809265137, "trigger": "sustained_closure"}
+{"event_id": "392fb116-b4de-4152-86b8-f8ee060288ff", "timestamp": "2026-08-04T04:45:32.668467Z", "event_type": "drowsiness_detected", "ear": 0.20900000631809235, "trigger": "sustained_closure"}
+{"event_id": "4151be9a-62f4-44b5-a259-9164c68af939", "timestamp": "2026-08-04T04:45:36.693562Z", "event_type": "drowsiness_detected", "ear": 0.04699999839067459, "trigger": "sustained_closure"}
+{"event_id": "01ab38ce-5005-4357-9b5e-37376f957760", "timestamp": "2026-08-04T04:45:40.718176Z", "event_type": "drowsiness_detected", "ear": 0.1979999989271164, "trigger": "sustained_closure"}
+{"event_id": "8e34db69-9f74-4e29-a348-66649d156428", "timestamp": "2026-08-04T04:45:44.741840Z", "event_type": "drowsiness_detected", "ear": 0.32600000500679016, "trigger": "sustained_closure"}
+{"event_id": "10cf4691-4bba-46cf-9210-89664b2f6b8a", "timestamp": "2026-08-04T04:45:48.764986Z", "event_type": "drowsiness_detected", "ear": 0.3140000104904175, "trigger": "sustained_closure"}
+{"event_id": "327b0baf-0bd3-4e1f-ace8-14be8ef527b9", "timestamp": "2026-08-04T04:50:07.898391Z", "event_type": "drowsiness_detected", "ear": 0.03700000047683716}
+{"event_id": "398f40c8-1099-4e6b-ac9d-7100bf4ec83f", "timestamp": "2026-08-04T04:50:13.956170Z", "event_type": "yawn_detected", "mar": 0.568}
+{"event_id": "92b83468-d0ea-4ed3-b3c1-b3d0538ddbc3", "timestamp": "2026-08-04T04:50:17.978375Z", "event_type": "yawn_detected", "mar": 1.04}
+{"event_id": "dad41e68-2f11-4f67-bef8-2df333c260c8", "timestamp": "2026-08-04T04:50:22.001392Z", "event_type": "yawn_detected", "mar": 0.723}
+{"event_id": "229d8933-74d2-4171-a266-ad30e3cb6b18", "timestamp": "2026-08-04T04:50:25.124536Z", "event_type": "drowsiness_detected", "ear": 0.1289999932050705}
+{"event_id": "eeb27011-a3b4-41da-8dec-3b01f4abc69d", "timestamp": "2026-08-04T04:50:29.150611Z", "event_type": "drowsiness_detected", "ear": 0.24400000274181366}
+{"event_id": "071b80e8-e074-45e9-97c8-b351e17f4d2f", "timestamp": "2026-08-04T04:50:33.373202Z", "event_type": "drowsiness_detected", "ear": 0.24400000274181366}
+{"event_id": "f96010a2-8efd-4d7b-bd31-01920bc46091", "timestamp": "2026-08-04T04:50:37.397684Z", "event_type": "drowsiness_detected", "ear": 0.23999999463558197}
+{"event_id": "d9fc4ae2-560e-4dda-8575-286ef5613a54", "timestamp": "2026-08-04T04:51:05.400551Z", "event_type": "drowsiness_detected", "ear": 0.02199999988079071}
+{"event_id": "01c31a3e-2602-4fec-890d-c5bd2c057a2d", "timestamp": "2026-08-04T04:51:13.301226Z", "event_type": "yawn_detected", "mar": 0.553}
+{"event_id": "51f45fff-0555-41d4-9cef-58fc0102fb6d", "timestamp": "2026-08-04T04:51:17.326496Z", "event_type": "yawn_detected", "mar": 0.824}
+{"event_id": "62f7b3ed-49fc-47d4-b50f-38859b7b8ee0", "timestamp": "2026-08-04T04:51:17.459203Z", "event_type": "phone_detected", "confidence": 0.353, "frames_confirmed": "0/5", "frames_confirmed_low_conf": "7/10"}
+{"event_id": "0f50789a-a745-4f53-a424-22cd8a72453f", "timestamp": "2026-08-04T04:52:02.151976Z", "event_type": "phone_detected", "confidence": 0.33, "frames_confirmed": "0/5", "frames_confirmed_low_conf": "7/10"}
