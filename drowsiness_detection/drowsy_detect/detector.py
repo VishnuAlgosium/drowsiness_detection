@@ -128,12 +128,13 @@ def run() -> None:
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
     
     rtsp_url = config.RTSP_URL.strip() if config.RTSP_URL else None
+
     if rtsp_url:
         print(f"[INFO] Using RTSP stream: {rtsp_url}")
         cap = cv2.VideoCapture(rtsp_url)
     else:
-        print("[INFO] Using local webcam")
-        cap = cv2.VideoCapture(1)
+        print(f"[INFO] Using local webcam index: {config.WEBCAM_INDEX}")
+        cap = cv2.VideoCapture(config.WEBCAM_INDEX)
 
     
 
