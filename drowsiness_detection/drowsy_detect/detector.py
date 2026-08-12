@@ -15,10 +15,13 @@ import cv2
 
 from . import config
 from .alerts import log_alert, FrameLogger
-from .audio import play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert, shutdown_audio
+from .audio import (
+    play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
+    play_head_drop_alert, shutdown_audio,
+)
 from .ear import eye_aspect_ratio
 from .mar import mouth_aspect_ratio
-from .gaze import head_yaw_ratio
+from .gaze import head_yaw_ratio, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
@@ -130,7 +133,7 @@ def run() -> None:
         cap = cv2.VideoCapture(rtsp_url)
     else:
         print("[INFO] Using local webcam")
-        cap = cv2.VideoCapture(4)
+        cap = cv2.VideoCapture(1)
 
     
 
@@ -172,6 +175,14 @@ def run() -> None:
     gaze_distraction_count = 0
     last_gaze_alert = 0.0
     current_yaw_ratio = 0.5
+
+    head_drop_counter = 0
+    head_drop_count = 0
+    last_head_drop_alert = 0.0
+    current_pitch_ratio = 0.5
+    # Trailing pitch history, used to check the drop happened quickly rather
+    # than a slow, deliberate lean (e.g. checking a lap or console).
+    pitch_history = deque(maxlen=max(2, int(config.CAM_FPS * config.HEAD_DROP_WINDOW_SEC)))
 
     frame_num = 0
 
@@ -220,6 +231,14 @@ def run() -> None:
                 looking_away = current_yaw_ratio < config.YAW_RATIO_LOW or current_yaw_ratio > config.YAW_RATIO_HIGH
                 gaze_counter = gaze_counter + 1 if looking_away else max(0, gaze_counter - 1)
 
+                current_pitch_ratio = head_pitch_ratio(
+                    landmarks, config.FOREHEAD_IDX, config.CHIN_IDX, config.NOSE_TIP_IDX
+                )
+                pitch_history.append(current_pitch_ratio)
+
+                is_head_down = current_pitch_ratio > config.PITCH_RATIO_DOWN
+                head_drop_counter = head_drop_counter + 1 if is_head_down else max(0, head_drop_counter - 1)
+
                 # Smooth EAR so a single noisy frame can't flip the counter.
                 smoothed_ear = current_ear if smoothed_ear is None else (
                     config.EAR_SMOOTHING_ALPHA * current_ear
@@ -256,6 +275,7 @@ def run() -> None:
                     yawn_counter = max(0, yawn_counter - 1)
                     small_yawn_counter = max(0, small_yawn_counter - 1)
                     gaze_counter = max(0, gaze_counter - 1)
+                    head_drop_counter = max(0, head_drop_counter - 1)
 
             now = time.time()
 
@@ -287,6 +307,16 @@ def run() -> None:
                 log_alert("distraction_detected", {"source": "gaze_away", "yaw_ratio": round(current_yaw_ratio, 3)})
                 last_gaze_alert = now
 
+            # ── Head drop alert (sudden nod, held down) ──
+            pitch_rise = current_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
+            head_drop_confirmed = head_drop_counter >= config.HEAD_DROP_HOLD_FRAMES and pitch_rise >= config.HEAD_DROP_DELTA
+            if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
+                head_drop_count += 1
+                print(f"[HEAD DROP #{head_drop_count}] pitch_ratio={current_pitch_ratio:.3f} rise={pitch_rise:.3f}")
+                play_head_drop_alert()
+                log_alert("head_drop_detected", {"pitch_ratio": round(current_pitch_ratio, 3), "pitch_rise": round(pitch_rise, 3)})
+                last_head_drop_alert = now
+
             # ── Phone-use alert (+ low-confidence distraction) ──
             phone_detected = False
             phone_confidence = 0.0
@@ -313,22 +343,25 @@ def run() -> None:
                 RED = (0, 0, 255)
 
                 is_distracted = gaze_counter >= config.DISTRACTION_CONSEC_FRAMES
+                is_head_down = current_pitch_ratio > config.PITCH_RATIO_DOWN
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
                 mar_text = f"MAR: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw: {current_yaw_ratio:.2f} ({gaze_counter}/{config.DISTRACTION_CONSEC_FRAMES})  Distractions:{total_distractions}"
+                pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{config.HEAD_DROP_HOLD_FRAMES})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
                 cv2.putText(frame, mar_text, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_yawning else GREEN, 2)
                 cv2.putText(frame, yaw_text, (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_distracted else GREEN, 2)
-                cv2.putText(frame, fps_text, (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
+                cv2.putText(frame, pitch_text, (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_head_down else GREEN, 2)
+                cv2.putText(frame, fps_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
 
                 if phone_detector:
                     phone_detector.draw(frame)
                     phone_text = f"Phone: {phone_confidence:.2f}  Alerts:{phone_detector.alert_count}"
-                    cv2.putText(frame, phone_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
+                    cv2.putText(frame, phone_text, (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
 
                 frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
                 display.show(frame)
@@ -364,6 +397,6 @@ def run() -> None:
     total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
     print(
         f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
-        f"  Distractions: {total_distractions}{phone_summary}"
+        f"  Distractions: {total_distractions}  Head drops: {head_drop_count}{phone_summary}"
     )
     print(f"[INFO] Per-frame log saved to {frame_log.path}")

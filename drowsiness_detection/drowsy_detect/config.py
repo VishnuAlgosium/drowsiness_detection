@@ -17,16 +17,13 @@ OPENCV_NUM_THREADS = 4
 OPENCV_USE_OPENCL = False
 
 
-
-
-
 def apply_cpu_settings() -> None:
     """Apply the CPU/threading env vars. Call this before importing cv2/mediapipe/ultralytics."""
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
-RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
-# RTSP_URL = ""
+# RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
+RTSP_URL = ""
 
 # ─────────────────────────────────────────────
 # Drowsiness detection (Eye Aspect Ratio)
@@ -92,6 +89,24 @@ DISTRACTION_CONSEC_FRAMES = 45   # ~1.5s at 30fps held before flagging
 DISTRACTION_COOLDOWN_SEC = 4.0
 
 # ─────────────────────────────────────────────
+# Head drop detection (sudden downward head pitch, e.g. nodding off)
+# ─────────────────────────────────────────────
+
+FOREHEAD_IDX = 10
+CHIN_IDX = 152
+
+# A real head drop happens quickly; slowly leaning down to check a phone
+# should not count. Window over which the "how fast" check is measured.
+HEAD_DROP_WINDOW_SEC = 1.0
+HEAD_DROP_DELTA = 0.12          # min pitch-ratio rise within the window to count as "sudden"
+
+# Absolute "head is down" threshold, and how long it must stay past that
+# threshold to count as a real drop rather than a quick self-correcting nod.
+PITCH_RATIO_DOWN = 0.62
+HEAD_DROP_HOLD_FRAMES = 10
+HEAD_DROP_COOLDOWN_SEC = 4.0
+
+# ─────────────────────────────────────────────
 # Phone-use detection (YOLO ONNX)
 # ─────────────────────────────────────────────
 
@@ -132,16 +147,16 @@ DISPLAY_ON_START = True
 # Camera
 # ─────────────────────────────────────────────
 
-CAM_WIDTH = 704
-CAM_HEIGHT = 576
-CAM_FPS = 25
+CAM_WIDTH = 640
+CAM_HEIGHT = 480
+CAM_FPS = 30
 
 # ─────────────────────────────────────────────
 # ffplay output window
 # ─────────────────────────────────────────────
 
-DISPLAY_W = 704
-DISPLAY_H = 576
+DISPLAY_W = 640
+DISPLAY_H = 480
 
 # ─────────────────────────────────────────────
 # MediaPipe eye landmark indices

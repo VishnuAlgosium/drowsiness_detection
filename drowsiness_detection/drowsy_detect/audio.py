@@ -7,6 +7,7 @@ alert can be identified by ear alone:
     yawn        -> single, low-pitched
     phone       -> triple, high-pitched
     distraction -> double, mid-pitched
+    head drop   -> fast three-tone descending sweep
 """
 
 import numpy as np
@@ -86,6 +87,15 @@ def play_distraction_alert() -> None:
     silence = np.zeros(int(44100 * 0.12), dtype=np.int16)
     beep = _beep(750, 0.25, vol=0.55)
     seq = np.concatenate([beep, silence, beep])
+    _play_sequence(seq)
+
+
+def play_head_drop_alert() -> None:
+    """Distinct fast, descending three-tone alert used for a sudden head drop (nodding off)."""
+    b1 = _beep(1000, 0.12, vol=0.6)
+    b2 = _beep(750, 0.12, vol=0.6)
+    b3 = _beep(500, 0.18, vol=0.65)
+    seq = np.concatenate([b1, b2, b3])
     _play_sequence(seq)
 
 
