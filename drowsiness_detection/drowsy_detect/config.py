@@ -17,11 +17,16 @@ OPENCV_NUM_THREADS = 4
 OPENCV_USE_OPENCL = False
 
 
+
+
+
 def apply_cpu_settings() -> None:
     """Apply the CPU/threading env vars. Call this before importing cv2/mediapipe/ultralytics."""
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
+RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
+# RTSP_URL = ""
 
 # ─────────────────────────────────────────────
 # Drowsiness detection (Eye Aspect Ratio)
@@ -127,16 +132,16 @@ DISPLAY_ON_START = True
 # Camera
 # ─────────────────────────────────────────────
 
-CAM_WIDTH = 640
-CAM_HEIGHT = 480
-CAM_FPS = 30
+CAM_WIDTH = 704
+CAM_HEIGHT = 576
+CAM_FPS = 25
 
 # ─────────────────────────────────────────────
 # ffplay output window
 # ─────────────────────────────────────────────
 
-DISPLAY_W = 640
-DISPLAY_H = 480
+DISPLAY_W = 704
+DISPLAY_H = 576
 
 # ─────────────────────────────────────────────
 # MediaPipe eye landmark indices

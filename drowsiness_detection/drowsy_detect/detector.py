@@ -123,13 +123,25 @@ def run() -> None:
 
     face_mesh, mp = _build_face_landmarker()
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
+    
+    rtsp_url = config.RTSP_URL.strip() if config.RTSP_URL else None
+    if rtsp_url:
+        print(f"[INFO] Using RTSP stream: {rtsp_url}")
+        cap = cv2.VideoCapture(rtsp_url)
+    else:
+        print("[INFO] Using local webcam")
+        cap = cv2.VideoCapture(4)
 
+<<<<<<< HEAD
     cap = cv2.VideoCapture(1)
+=======
+    
+>>>>>>> 7ac372b (added rtsp cap read funtion)
 
     if not cap.isOpened():
         print("[ERROR] Cannot open webcam")
         sys.exit(1)
-
+    print("cv2.CAP_PROP_FRAME_WIDTH",cv2.CAP_PROP_FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, config.CAM_FPS)
