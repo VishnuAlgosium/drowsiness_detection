@@ -3,9 +3,10 @@ audio.py
 --------
 Pygame-based beep alerts. Each detector gets its own distinct tone so an
 alert can be identified by ear alone:
-    drowsiness -> two-tone, low-pitched
-    yawn       -> single, low-pitched
-    phone      -> triple, high-pitched
+    drowsiness  -> two-tone, low-pitched
+    yawn        -> single, low-pitched
+    phone       -> triple, high-pitched
+    distraction -> double, mid-pitched
 """
 
 import numpy as np
@@ -77,6 +78,14 @@ def play_phone_alert() -> None:
     silence = np.zeros(int(44100 * 0.08), dtype=np.int16)
     beep = _beep(1200, 0.15, vol=0.5)
     seq = np.concatenate([beep, silence, beep, silence, beep])
+    _play_sequence(seq)
+
+
+def play_distraction_alert() -> None:
+    """Distinct double, mid-pitched tone used for distraction (gaze away / low-confidence phone)."""
+    silence = np.zeros(int(44100 * 0.12), dtype=np.int16)
+    beep = _beep(750, 0.25, vol=0.55)
+    seq = np.concatenate([beep, silence, beep])
     _play_sequence(seq)
 
 

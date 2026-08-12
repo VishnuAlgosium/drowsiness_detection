@@ -15,9 +15,10 @@ import cv2
 
 from . import config
 from .alerts import log_alert, FrameLogger
-from .audio import play_alert, play_yawn_alert, play_phone_alert, shutdown_audio
+from .audio import play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert, shutdown_audio
 from .ear import eye_aspect_ratio
 from .mar import mouth_aspect_ratio
+from .gaze import head_yaw_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
@@ -123,7 +124,7 @@ def run() -> None:
     face_mesh, mp = _build_face_landmarker()
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
 
-    cap = cv2.VideoCapture(2)
+    cap = cv2.VideoCapture(1)
 
     if not cap.isOpened():
         print("[ERROR] Cannot open webcam")
@@ -158,6 +159,11 @@ def run() -> None:
     # Trailing "mouth open" history, used to tell one sustained yawn apart
     # from the repeated open/close of talking, laughing, or singing.
     mouth_open_history = deque(maxlen=config.YAWN_TRANSITION_WINDOW)
+
+    gaze_counter = 0
+    gaze_distraction_count = 0
+    last_gaze_alert = 0.0
+    current_yaw_ratio = 0.5
 
     frame_num = 0
 
@@ -200,6 +206,11 @@ def run() -> None:
                     config.MOUTH_LEFT, config.MOUTH_RIGHT,
                     w, h,
                 )
+                current_yaw_ratio = head_yaw_ratio(
+                    landmarks, config.NOSE_TIP_IDX, config.FACE_LEFT_EDGE_IDX, config.FACE_RIGHT_EDGE_IDX
+                )
+                looking_away = current_yaw_ratio < config.YAW_RATIO_LOW or current_yaw_ratio > config.YAW_RATIO_HIGH
+                gaze_counter = gaze_counter + 1 if looking_away else max(0, gaze_counter - 1)
 
                 # Smooth EAR so a single noisy frame can't flip the counter.
                 smoothed_ear = current_ear if smoothed_ear is None else (
@@ -236,6 +247,7 @@ def run() -> None:
                     counter = max(0, counter - 1)
                     yawn_counter = max(0, yawn_counter - 1)
                     small_yawn_counter = max(0, small_yawn_counter - 1)
+                    gaze_counter = max(0, gaze_counter - 1)
 
             now = time.time()
 
@@ -259,14 +271,25 @@ def run() -> None:
                 log_alert("yawn_detected", {"mar": round(current_mar, 3)})
                 last_yawn_alert = now
 
-            # ── Phone-use alert ──
+            # ── Distraction alert (sustained look-away) ──
+            if gaze_counter >= config.DISTRACTION_CONSEC_FRAMES and now - last_gaze_alert > config.DISTRACTION_COOLDOWN_SEC:
+                gaze_distraction_count += 1
+                print(f"[DISTRACTION #{gaze_distraction_count}] Looking away yaw_ratio={current_yaw_ratio:.3f}")
+                play_distraction_alert()
+                log_alert("distraction_detected", {"source": "gaze_away", "yaw_ratio": round(current_yaw_ratio, 3)})
+                last_gaze_alert = now
+
+            # ── Phone-use alert (+ low-confidence distraction) ──
             phone_detected = False
             phone_confidence = 0.0
             if phone_detector:
-                phone_detected, phone_confidence, phone_alert_fired = phone_detector.process(frame, now)
+                phone_detected, phone_confidence, phone_alert_fired, phone_distraction_fired = phone_detector.process(frame, now)
                 if phone_alert_fired:
                     print(f"[PHONE #{phone_detector.alert_count}] Phone detected conf={phone_confidence:.3f}")
                     play_phone_alert()
+                if phone_distraction_fired:
+                    print(f"[DISTRACTION #{phone_detector.distraction_count}] Possible phone (low confidence) conf={phone_confidence:.3f}")
+                    play_distraction_alert()
 
             frame_elapsed = time.perf_counter() - frame_start
             current_fps = 1.0 / frame_elapsed if frame_elapsed > 0 else 0.0
@@ -281,18 +304,23 @@ def run() -> None:
                 ORANGE = (0, 165, 255)
                 RED = (0, 0, 255)
 
+                is_distracted = gaze_counter >= config.DISTRACTION_CONSEC_FRAMES
+                total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
+
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
                 mar_text = f"MAR: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
+                yaw_text = f"Yaw: {current_yaw_ratio:.2f} ({gaze_counter}/{config.DISTRACTION_CONSEC_FRAMES})  Distractions:{total_distractions}"
                 fps_text = f"FPS: {current_fps:.1f}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
                 cv2.putText(frame, mar_text, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_yawning else GREEN, 2)
-                cv2.putText(frame, fps_text, (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
+                cv2.putText(frame, yaw_text, (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_distracted else GREEN, 2)
+                cv2.putText(frame, fps_text, (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
 
                 if phone_detector:
                     phone_detector.draw(frame)
                     phone_text = f"Phone: {phone_confidence:.2f}  Alerts:{phone_detector.alert_count}"
-                    cv2.putText(frame, phone_text, (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
+                    cv2.putText(frame, phone_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
 
                 frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
                 display.show(frame)
@@ -325,5 +353,9 @@ def run() -> None:
         frame_log.close()
 
     phone_summary = f"  Phone alerts: {phone_detector.alert_count}" if phone_detector else ""
-    print(f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}{phone_summary}")
+    total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
+    print(
+        f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
+        f"  Distractions: {total_distractions}{phone_summary}"
+    )
     print(f"[INFO] Per-frame log saved to {frame_log.path}")

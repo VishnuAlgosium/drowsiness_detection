@@ -71,6 +71,22 @@ MOUTH_LEFT = 78
 MOUTH_RIGHT = 308
 
 # ─────────────────────────────────────────────
+# Distraction detection (head yaw + low-confidence phone)
+# ─────────────────────────────────────────────
+
+# MediaPipe face mesh indices used for yaw estimation.
+NOSE_TIP_IDX = 1
+FACE_LEFT_EDGE_IDX = 234
+FACE_RIGHT_EDGE_IDX = 454
+
+# Forward-facing yaw ratio is ~0.5; outside this band counts as looking away.
+YAW_RATIO_LOW = 0.35
+YAW_RATIO_HIGH = 0.65
+
+DISTRACTION_CONSEC_FRAMES = 45   # ~1.5s at 30fps held before flagging
+DISTRACTION_COOLDOWN_SEC = 4.0
+
+# ─────────────────────────────────────────────
 # Phone-use detection (YOLO ONNX)
 # ─────────────────────────────────────────────
 
@@ -81,7 +97,7 @@ PHONE_DETECTION_ENABLED = True
 PHONE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "models",
-    "phone_detection_v2_ncnn_model",
+    "phone_detection_v4_ncnn_model",
 )
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
@@ -100,15 +116,6 @@ PHONE_DETECT_EVERY_N_FRAMES = 3
 PHONE_LOW_CONF_THRESHOLD = 0.30
 PHONE_LOW_CONF_WINDOW = 10
 PHONE_LOW_CONF_FRAMES = 7
-
-# Shape gate: box must look roughly phone-proportioned (~2:1, portrait or
-# landscape), filters out other dark handheld objects.
-PHONE_MIN_ASPECT = 1.5
-PHONE_MAX_ASPECT = 3.0
-
-# Black border added before inference so edge-clipped phones aren't
-# penalized for looking incomplete.
-PHONE_EDGE_PAD_PX = 60
 
 # ─────────────────────────────────────────────
 # Display defaults
