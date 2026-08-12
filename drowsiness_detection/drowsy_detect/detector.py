@@ -132,11 +132,7 @@ def run() -> None:
         print("[INFO] Using local webcam")
         cap = cv2.VideoCapture(4)
 
-<<<<<<< HEAD
-    cap = cv2.VideoCapture(1)
-=======
     
->>>>>>> 7ac372b (added rtsp cap read funtion)
 
     if not cap.isOpened():
         print("[ERROR] Cannot open webcam")
