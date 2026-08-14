@@ -45,6 +45,21 @@ def log_alert(event_type: str, details: dict) -> None:
         f.write(json.dumps(event, default=_json_safe) + "\n")
 
 
+def cleanup_old_logs(retention_days: int = None) -> None:
+    """Delete log files older than retention_days. SD-card storage on edge
+    devices is limited, so old JSONL/CSV logs need to be pruned periodically."""
+    retention_days = config.LOG_RETENTION_DAYS if retention_days is None else retention_days
+
+    if not os.path.isdir(config.LOG_DIR):
+        return
+
+    cutoff = datetime.now().timestamp() - retention_days * 86400
+    for name in os.listdir(config.LOG_DIR):
+        path = os.path.join(config.LOG_DIR, name)
+        if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+            os.remove(path)
+
+
 class FrameLogger:
     """Per-frame CSV of all three signals, written once per loop iteration."""
 
@@ -58,6 +73,7 @@ class FrameLogger:
         self._writer.writerow(
             ["timestamp", "frame_num", "ear", "mar", "phone_confidence", "fps"]
         )
+        self._rows_since_flush = 0
 
     def write(self, frame_num: int, ear: float, mar: float, phone_confidence: float, fps: float) -> None:
         self._writer.writerow([
@@ -69,5 +85,12 @@ class FrameLogger:
             f"{fps:.1f}",
         ])
 
+        self._rows_since_flush += 1
+        if self._rows_since_flush >= config.FRAME_LOG_FLUSH_EVERY_N:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+            self._rows_since_flush = 0
+
     def close(self) -> None:
+        self._file.flush()
         self._file.close()

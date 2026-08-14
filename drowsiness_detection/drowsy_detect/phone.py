@@ -1,7 +1,7 @@
 """
 phone.py
 --------
-Phone-use detection via a YOLO ONNX model, using confirm-frames + cooldown
+Phone-use detection via a YOLO NCNN model, using confirm-frames + cooldown
 alerting. Two confidence tiers:
 
   - High tier: clear view, fires a "phone_detected" alert.

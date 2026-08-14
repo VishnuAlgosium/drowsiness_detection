@@ -141,6 +141,8 @@ PHONE_LOW_CONF_FRAMES = 7
 # Display defaults
 # ─────────────────────────────────────────────
 
+# Off by default: most edge deployments (headless Pi) have no attached
+# display, and ffplay may not even be installed. Enable with 'v' at runtime.
 DISPLAY_ON_START = True
 
 # ─────────────────────────────────────────────
@@ -150,6 +152,16 @@ DISPLAY_ON_START = True
 CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
+
+# Device index for cv2.VideoCapture when RTSP_URL is unset. On a Pi with a
+# single USB/CSI camera this is almost always 0.
+CAMERA_INDEX = 2
+
+CAMERA_RECONNECT_ATTEMPTS = 5
+CAMERA_RECONNECT_DELAY_SEC = 2.0
+
+# Hard cap so a missing/dark camera can't hang startup forever.
+EAR_CALIBRATION_TIMEOUT_SEC = 15.0
 
 # ─────────────────────────────────────────────
 # ffplay output window
@@ -191,3 +203,11 @@ CAMERA_ID = "cam-001"
 LOG_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
 )
+
+# Flush/fsync the per-frame CSV every N rows instead of every row, since
+# writing at 30fps to an SD card wears it out fast.
+FRAME_LOG_FLUSH_EVERY_N = 30
+
+# Old log files older than this are deleted at startup -- SD-card storage
+# on edge devices is limited and this runs unattended for long stretches.
+LOG_RETENTION_DAYS = 14

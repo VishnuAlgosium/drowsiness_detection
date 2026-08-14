@@ -7,6 +7,7 @@ one shared run loop.
 """
 
 import os
+import signal
 import sys
 import time
 from collections import deque
@@ -14,7 +15,7 @@ from collections import deque
 import cv2
 
 from . import config
-from .alerts import log_alert, FrameLogger
+from .alerts import log_alert, FrameLogger, cleanup_old_logs
 from .audio import (
     play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
     play_head_drop_alert, shutdown_audio,
@@ -25,6 +26,48 @@ from .gaze import head_yaw_ratio, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
+
+
+_shutdown_requested = False
+
+
+def _handle_sigterm(signum, frame) -> None:
+    """Sets a flag instead of exiting immediately, so the main loop's
+    `finally` block still runs (releases camera, closes audio/log files)."""
+    global _shutdown_requested
+    _shutdown_requested = True
+
+
+class MonotonicTimestamp:
+    """Strictly increasing ms timestamps for MediaPipe's VIDEO mode, which
+    requires each timestamp to exceed the last. Wall-clock time (time.time())
+    can jump backward on NTP sync, which is common right after boot on a
+    device with no RTC -- time.monotonic() never does."""
+
+    def __init__(self):
+        self._last_ms = -1
+
+    def next(self) -> int:
+        ms = int(time.monotonic() * 1000)
+        if ms <= self._last_ms:
+            ms = self._last_ms + 1
+        self._last_ms = ms
+        return ms
+
+
+def _open_camera():
+    rtsp_url = config.RTSP_URL.strip() if config.RTSP_URL else None
+
+    if rtsp_url:
+        cap = cv2.VideoCapture(rtsp_url)
+    else:
+        cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_V4L2)
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, config.CAM_FPS)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return cap
 
 
 def _check_model() -> None:
@@ -66,7 +109,7 @@ def _build_face_landmarker():
     return vision.FaceLandmarker.create_from_options(options), mp
 
 
-def _read_ear_for_calibration(cap, face_mesh, mp):
+def _read_ear_for_calibration(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
     """One capture+EAR-read cycle, reused by the calibration phase below."""
     ret, frame = cap.read()
     if not ret:
@@ -76,8 +119,7 @@ def _read_ear_for_calibration(cap, face_mesh, mp):
     h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    timestamp_ms = int(time.time() * 1000)
-    face_results = face_mesh.detect_for_video(mp_image, timestamp_ms)
+    face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
     if not face_results.face_landmarks:
         return None
@@ -88,12 +130,13 @@ def _read_ear_for_calibration(cap, face_mesh, mp):
     return (left_ear + right_ear) / 2.0
 
 
-def _calibrate_ear_threshold(cap, face_mesh, mp) -> float:
+def _calibrate_ear_threshold(cap, face_mesh, mp, timestamps: MonotonicTimestamp) -> float:
     """
     Sample EAR for config.EAR_CALIBRATION_FRAMES frames (assuming eyes are
     open) and derive a personal threshold, since a single fixed EAR cutoff
     doesn't fit everyone's eye shape. Falls back to config.EAR_THRESHOLD if
-    no face is found.
+    no face is found, or if no face shows up within the timeout (e.g. camera
+    not yet aimed at anyone).
     """
     if config.EAR_CALIBRATION_FRAMES <= 0:
         return config.EAR_THRESHOLD
@@ -101,8 +144,13 @@ def _calibrate_ear_threshold(cap, face_mesh, mp) -> float:
     print(f"[INFO] Calibrating eye baseline ({config.EAR_CALIBRATION_FRAMES} frames, keep eyes open and face the camera)...")
 
     samples = []
+    start_time = time.monotonic()
     while len(samples) < config.EAR_CALIBRATION_FRAMES:
-        ear = _read_ear_for_calibration(cap, face_mesh, mp)
+        if time.monotonic() - start_time > config.EAR_CALIBRATION_TIMEOUT_SEC:
+            print("[WARN] Calibration timed out -- falling back to default EAR threshold")
+            return config.EAR_THRESHOLD
+
+        ear = _read_ear_for_calibration(cap, face_mesh, mp, timestamps)
         if ear is not None:
             samples.append(ear)
 
@@ -122,31 +170,27 @@ def run() -> None:
     cv2.ocl.setUseOpenCL(config.OPENCV_USE_OPENCL)
     cv2.setNumThreads(config.OPENCV_NUM_THREADS)
 
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     _check_model()
+    cleanup_old_logs()
 
     face_mesh, mp = _build_face_landmarker()
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
-    
-    rtsp_url = config.RTSP_URL.strip() if config.RTSP_URL else None
-    if rtsp_url:
-        print(f"[INFO] Using RTSP stream: {rtsp_url}")
-        cap = cv2.VideoCapture(rtsp_url)
-    else:
-        print("[INFO] Using local webcam")
-        cap = cv2.VideoCapture(1)
 
-    
+    if config.RTSP_URL.strip():
+        print(f"[INFO] Using RTSP stream: {config.RTSP_URL.strip()}")
+    else:
+        print(f"[INFO] Using local webcam (index {config.CAMERA_INDEX})")
+
+    cap = _open_camera()
 
     if not cap.isOpened():
         print("[ERROR] Cannot open webcam")
         sys.exit(1)
-    print("cv2.CAP_PROP_FRAME_WIDTH",cv2.CAP_PROP_FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, config.CAM_FPS)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    ear_threshold = _calibrate_ear_threshold(cap, face_mesh, mp)
+    timestamps = MonotonicTimestamp()
+    ear_threshold = _calibrate_ear_threshold(cap, face_mesh, mp, timestamps)
 
     display = LazyDisplay(config.DISPLAY_W, config.DISPLAY_H, config.CAM_FPS)
     display_on = config.DISPLAY_ON_START
@@ -192,12 +236,31 @@ def run() -> None:
 
     try:
         while True:
+            if _shutdown_requested:
+                print("[INFO] Shutdown signal received")
+                break
+
             frame_start = time.perf_counter()
             ret, frame = cap.read()
 
             if not ret:
-                print("[ERROR] Camera frame failed")
-                break
+                print("[WARN] Camera frame failed, attempting reconnect")
+                cap.release()
+
+                reconnected = False
+                for attempt in range(1, config.CAMERA_RECONNECT_ATTEMPTS + 1):
+                    time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
+                    cap = _open_camera()
+                    if cap.isOpened():
+                        print(f"[INFO] Camera reconnected (attempt {attempt})")
+                        reconnected = True
+                        break
+
+                if not reconnected:
+                    print("[ERROR] Camera reconnect failed, exiting")
+                    break
+
+                continue
 
             frame_num += 1
             frame = cv2.flip(frame, 1)
@@ -206,8 +269,7 @@ def run() -> None:
             # ── Face landmarks -> EAR (drowsiness) + MAR (yawn) ──
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            timestamp_ms = int(time.time() * 1000)
-            face_results = face_mesh.detect_for_video(mp_image, timestamp_ms)
+            face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
             current_ear = 0.0
             current_mar = 0.0
