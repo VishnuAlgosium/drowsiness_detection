@@ -22,7 +22,7 @@ from .audio import (
 )
 from .ear import eye_aspect_ratio
 from .mar import mouth_aspect_ratio
-from .gaze import head_yaw_ratio, head_pitch_ratio
+from .gaze import head_pose_angles, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
@@ -100,7 +100,7 @@ def _build_face_landmarker():
         running_mode=vision.RunningMode.VIDEO,
         num_faces=1,
         output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
+        output_facial_transformation_matrixes=True,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -109,8 +109,9 @@ def _build_face_landmarker():
     return vision.FaceLandmarker.create_from_options(options), mp
 
 
-def _read_ear_for_calibration(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
-    """One capture+EAR-read cycle, reused by the calibration phase below."""
+def _read_calibration_sample(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
+    """One capture+read cycle, reused by the calibration phase below.
+    Returns (ear, yaw, pitch, roll) or None if no face was found."""
     ret, frame = cap.read()
     if not ret:
         return None
@@ -127,41 +128,61 @@ def _read_ear_for_calibration(cap, face_mesh, mp, timestamps: MonotonicTimestamp
     landmarks = face_results.face_landmarks[0]
     left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
     right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
-    return (left_ear + right_ear) / 2.0
+    ear = (left_ear + right_ear) / 2.0
+
+    yaw, pitch, roll = 0.0, 0.0, 0.0
+    if face_results.facial_transformation_matrixes:
+        pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
+        if pose_angles:
+            yaw, pitch, roll = pose_angles
+
+    return ear, yaw, pitch, roll
 
 
-def _calibrate_ear_threshold(cap, face_mesh, mp, timestamps: MonotonicTimestamp) -> float:
+def _calibrate_baseline(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
     """
-    Sample EAR for config.EAR_CALIBRATION_FRAMES frames (assuming eyes are
-    open) and derive a personal threshold, since a single fixed EAR cutoff
-    doesn't fit everyone's eye shape. Falls back to config.EAR_THRESHOLD if
-    no face is found, or if no face shows up within the timeout (e.g. camera
-    not yet aimed at anyone).
+    Sample EAR and head pose for config.EAR_CALIBRATION_FRAMES frames while
+    the driver looks at the road normally, and derive:
+      - a personal EAR threshold (eye shape varies per person)
+      - a yaw/pitch/roll baseline ("forward" isn't 0 degrees unless the
+        camera is mounted dead-center in front of the driver's face -- an
+        A-pillar or off-center mount needs this offset subtracted out)
+
+    Falls back to config.EAR_THRESHOLD and a zero gaze baseline if no face
+    is found, or if none shows up within the timeout.
     """
     if config.EAR_CALIBRATION_FRAMES <= 0:
-        return config.EAR_THRESHOLD
+        return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
 
-    print(f"[INFO] Calibrating eye baseline ({config.EAR_CALIBRATION_FRAMES} frames, keep eyes open and face the camera)...")
+    print(f"[INFO] Calibrating baseline ({config.EAR_CALIBRATION_FRAMES} frames, "
+          "keep eyes open and look at the road normally)...")
 
     samples = []
     start_time = time.monotonic()
     while len(samples) < config.EAR_CALIBRATION_FRAMES:
         if time.monotonic() - start_time > config.EAR_CALIBRATION_TIMEOUT_SEC:
-            print("[WARN] Calibration timed out -- falling back to default EAR threshold")
-            return config.EAR_THRESHOLD
+            print("[WARN] Calibration timed out -- falling back to defaults")
+            return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
 
-        ear = _read_ear_for_calibration(cap, face_mesh, mp, timestamps)
-        if ear is not None:
-            samples.append(ear)
+        sample = _read_calibration_sample(cap, face_mesh, mp, timestamps)
+        if sample is not None:
+            samples.append(sample)
 
     if not samples:
-        print("[WARN] Calibration found no face -- falling back to default EAR threshold")
-        return config.EAR_THRESHOLD
+        print("[WARN] Calibration found no face -- falling back to defaults")
+        return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
 
-    baseline_ear = sum(samples) / len(samples)
+    ears, yaws, pitches, rolls = zip(*samples)
+
+    baseline_ear = sum(ears) / len(ears)
     ear_threshold = baseline_ear * config.EAR_THRESHOLD_RATIO
-    print(f"[INFO] Baseline EAR={baseline_ear:.3f} -> using drowsy threshold={ear_threshold:.3f}")
-    return ear_threshold
+    baseline_yaw = sum(yaws) / len(yaws)
+    baseline_pitch = sum(pitches) / len(pitches)
+    baseline_roll = sum(rolls) / len(rolls)
+
+    print(f"[INFO] Baseline EAR={baseline_ear:.3f} -> drowsy threshold={ear_threshold:.3f}")
+    print(f"[INFO] Baseline gaze yaw={baseline_yaw:.1f} pitch={baseline_pitch:.1f} roll={baseline_roll:.1f}")
+    return ear_threshold, baseline_yaw, baseline_pitch, baseline_roll
 
 
 def run() -> None:
@@ -190,7 +211,9 @@ def run() -> None:
         sys.exit(1)
 
     timestamps = MonotonicTimestamp()
-    ear_threshold = _calibrate_ear_threshold(cap, face_mesh, mp, timestamps)
+    ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = _calibrate_baseline(
+        cap, face_mesh, mp, timestamps
+    )
 
     display = LazyDisplay(config.DISPLAY_W, config.DISPLAY_H, config.CAM_FPS)
     display_on = config.DISPLAY_ON_START
@@ -215,15 +238,19 @@ def run() -> None:
     # from the repeated open/close of talking, laughing, or singing.
     mouth_open_history = deque(maxlen=config.YAWN_TRANSITION_WINDOW)
 
-    gaze_counter = 0
+    gaze_away_start = None
+    gaze_away_elapsed = 0.0
     gaze_distraction_count = 0
     last_gaze_alert = 0.0
-    current_yaw_ratio = 0.5
+    current_yaw_deg = 0.0
+    current_pitch_deg = 0.0
+    current_roll_deg = 0.0
 
     head_drop_counter = 0
     head_drop_count = 0
     last_head_drop_alert = 0.0
     current_pitch_ratio = 0.5
+    smoothed_pitch_ratio = None
     # Trailing pitch history, used to check the drop happened quickly rather
     # than a slow, deliberate lean (e.g. checking a lap or console).
     pitch_history = deque(maxlen=max(2, int(config.CAM_FPS * config.HEAD_DROP_WINDOW_SEC)))
@@ -287,18 +314,34 @@ def run() -> None:
                     config.MOUTH_LEFT, config.MOUTH_RIGHT,
                     w, h,
                 )
-                current_yaw_ratio = head_yaw_ratio(
-                    landmarks, config.NOSE_TIP_IDX, config.FACE_LEFT_EDGE_IDX, config.FACE_RIGHT_EDGE_IDX
+                if face_results.facial_transformation_matrixes:
+                    pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
+                    if pose_angles:
+                        current_yaw_deg, current_pitch_deg, current_roll_deg = pose_angles
+
+                looking_away = (
+                    abs(current_yaw_deg - gaze_baseline_yaw) > config.YAW_ANGLE_MAX
+                    or abs(current_pitch_deg - gaze_baseline_pitch) > config.PITCH_ANGLE_MAX
+                    or abs(current_roll_deg - gaze_baseline_roll) > config.ROLL_ANGLE_MAX
                 )
-                looking_away = current_yaw_ratio < config.YAW_RATIO_LOW or current_yaw_ratio > config.YAW_RATIO_HIGH
-                gaze_counter = gaze_counter + 1 if looking_away else max(0, gaze_counter - 1)
+                if looking_away:
+                    if gaze_away_start is None:
+                        gaze_away_start = time.time()
+                else:
+                    gaze_away_start = None
 
                 current_pitch_ratio = head_pitch_ratio(
                     landmarks, config.FOREHEAD_IDX, config.CHIN_IDX, config.NOSE_TIP_IDX
                 )
-                pitch_history.append(current_pitch_ratio)
+                # Smooth so a single noisy/landmark-jitter frame can't
+                # register on its own as a "sudden" drop.
+                smoothed_pitch_ratio = current_pitch_ratio if smoothed_pitch_ratio is None else (
+                    config.HEAD_DROP_SMOOTHING_ALPHA * current_pitch_ratio
+                    + (1 - config.HEAD_DROP_SMOOTHING_ALPHA) * smoothed_pitch_ratio
+                )
+                pitch_history.append(smoothed_pitch_ratio)
 
-                is_head_down = current_pitch_ratio > config.PITCH_RATIO_DOWN
+                is_head_down = smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
                 head_drop_counter = head_drop_counter + 1 if is_head_down else max(0, head_drop_counter - 1)
 
                 # Smooth EAR so a single noisy frame can't flip the counter.
@@ -336,7 +379,7 @@ def run() -> None:
                     counter = max(0, counter - 1)
                     yawn_counter = max(0, yawn_counter - 1)
                     small_yawn_counter = max(0, small_yawn_counter - 1)
-                    gaze_counter = max(0, gaze_counter - 1)
+                    gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
 
             now = time.time()
@@ -362,15 +405,21 @@ def run() -> None:
                 last_yawn_alert = now
 
             # ── Distraction alert (sustained look-away) ──
-            if gaze_counter >= config.DISTRACTION_CONSEC_FRAMES and now - last_gaze_alert > config.DISTRACTION_COOLDOWN_SEC:
+            gaze_away_elapsed = (now - gaze_away_start) if gaze_away_start is not None else 0.0
+            if gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC and now - last_gaze_alert > config.DISTRACTION_COOLDOWN_SEC:
                 gaze_distraction_count += 1
-                print(f"[DISTRACTION #{gaze_distraction_count}] Looking away yaw_ratio={current_yaw_ratio:.3f}")
+                print(f"[DISTRACTION #{gaze_distraction_count}] Looking away yaw={current_yaw_deg:.1f} pitch={current_pitch_deg:.1f} roll={current_roll_deg:.1f}")
                 play_distraction_alert()
-                log_alert("distraction_detected", {"source": "gaze_away", "yaw_ratio": round(current_yaw_ratio, 3)})
+                log_alert("distraction_detected", {
+                    "source": "gaze_away",
+                    "yaw_deg": round(current_yaw_deg, 1),
+                    "pitch_deg": round(current_pitch_deg, 1),
+                    "roll_deg": round(current_roll_deg, 1),
+                })
                 last_gaze_alert = now
 
             # ── Head drop alert (sudden nod, held down) ──
-            pitch_rise = current_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
+            pitch_rise = smoothed_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
             head_drop_confirmed = head_drop_counter >= config.HEAD_DROP_HOLD_FRAMES and pitch_rise >= config.HEAD_DROP_DELTA
             if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
                 head_drop_count += 1
@@ -404,13 +453,13 @@ def run() -> None:
                 ORANGE = (0, 165, 255)
                 RED = (0, 0, 255)
 
-                is_distracted = gaze_counter >= config.DISTRACTION_CONSEC_FRAMES
-                is_head_down = current_pitch_ratio > config.PITCH_RATIO_DOWN
+                is_distracted = gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC
+                is_head_down = smoothed_pitch_ratio is not None and smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
                 mar_text = f"MAR: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
-                yaw_text = f"Yaw: {current_yaw_ratio:.2f} ({gaze_counter}/{config.DISTRACTION_CONSEC_FRAMES})  Distractions:{total_distractions}"
+                yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{config.HEAD_DROP_HOLD_FRAMES})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 

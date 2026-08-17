@@ -10,7 +10,8 @@ thresholds in config.py.
 Run from the same folder as gaze.py / config.py:
     python test_gaze_pose.py
 
-Keys: q = quit
+Keys: c = capture current pose as baseline ("forward"), r = reset baseline
+      to zero, q = quit
 """
 
 import cv2
@@ -22,7 +23,7 @@ from mediapipe.tasks.python import vision
 import config
 from gaze import head_pose_angles
 
-CAM_INDEX = 2  # change if your camera isn't index 0
+CAM_INDEX = 0  # change if your camera isn't index 0
 
 AXIS_COLORS = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # X=red, Y=green, Z=blue
 
@@ -52,6 +53,9 @@ def main():
 
     cap = cv2.VideoCapture(CAM_INDEX)
     timestamp_ms = 0
+    baseline_yaw, baseline_pitch, baseline_roll = 0.0, 0.0, 0.0
+
+    print("[INFO] Press 'c' to capture current pose as baseline, 'r' to reset, 'q' to quit")
 
     while True:
         ret, frame = cap.read()
@@ -80,23 +84,38 @@ def main():
                 rotation_matrix = np.array(transform)[:3, :3]
                 draw_pose_axis(frame, rotation_matrix, (nose_x, nose_y))
 
+                dev_yaw = yaw - baseline_yaw
+                dev_pitch = pitch - baseline_pitch
+                dev_roll = roll - baseline_roll
+
                 looking_away = (
-                    abs(yaw) > config.YAW_ANGLE_MAX
-                    or abs(pitch) > config.PITCH_ANGLE_MAX
-                    or abs(roll) > config.ROLL_ANGLE_MAX
+                    abs(dev_yaw) > config.YAW_ANGLE_MAX
+                    or abs(dev_pitch) > config.PITCH_ANGLE_MAX
+                    or abs(dev_roll) > config.ROLL_ANGLE_MAX
                 )
                 color = (0, 0, 255) if looking_away else (0, 255, 0)
                 cv2.putText(frame, f"Yaw:{yaw:.1f}  Pitch:{pitch:.1f}  Roll:{roll:.1f}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                cv2.putText(frame, f"Baseline yaw:{baseline_yaw:.1f} pitch:{baseline_pitch:.1f} roll:{baseline_roll:.1f}",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
                 cv2.putText(frame, "LOOKING AWAY" if looking_away else "FORWARD",
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                            (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         else:
             cv2.putText(frame, "No face detected", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
         cv2.imshow("Gaze Pose Test", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
             break
+        elif key == ord("c") and results.face_landmarks and results.facial_transformation_matrixes:
+            angles = head_pose_angles(results.facial_transformation_matrixes[0])
+            if angles:
+                baseline_yaw, baseline_pitch, baseline_roll = angles
+                print(f"[INFO] Baseline captured: yaw={baseline_yaw:.1f} pitch={baseline_pitch:.1f} roll={baseline_roll:.1f}")
+        elif key == ord("r"):
+            baseline_yaw, baseline_pitch, baseline_roll = 0.0, 0.0, 0.0
+            print("[INFO] Baseline reset to zero")
 
     cap.release()
     cv2.destroyAllWindows()

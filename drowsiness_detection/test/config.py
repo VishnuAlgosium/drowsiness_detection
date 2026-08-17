@@ -78,8 +78,11 @@ MOUTH_RIGHT = 308
 
 NOSE_TIP_IDX = 1
 
-# Forward-facing head pose is ~0 degrees on each axis; exceeding any of
-# these counts as looking away (covers side turns, up/down, and head tilt).
+# Tolerance around the calibrated baseline (see _calibrate_baseline in
+# detector.py) -- "forward" isn't 0 degrees unless the camera sits dead
+# center in front of the driver's face. An off-center mount (e.g. A-pillar)
+# means the baseline itself will be offset, and these are the allowed
+# deviation from it before counting as looking away.
 YAW_ANGLE_MAX = 20.0
 PITCH_ANGLE_MAX = 20.0
 ROLL_ANGLE_MAX = 25.0
