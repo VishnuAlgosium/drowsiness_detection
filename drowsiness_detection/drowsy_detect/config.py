@@ -47,8 +47,8 @@ NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start deca
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.6          # mouth-open ratio above which counts as "open"
-YAWN_CONSEC_FRAMES = 20      # ~0.6-0.7s at 30fps held open before it's a yawn
+MAR_THRESHOLD = 0.4          # mouth-open ratio above which counts as "open"
+YAWN_CONSEC_FRAMES = 10      # ~0.6-0.7s at 30fps held open before it's a yawn
 YAWN_COOLDOWN_SEC = 4.0
 
 # Looser threshold for small/suppressed yawns, held longer to compensate.

@@ -2,3 +2,6 @@ drowsiness_images
 __pycache__/
 logs/
 .vscode/
+*.pyc
+*.jpg
+*.csv

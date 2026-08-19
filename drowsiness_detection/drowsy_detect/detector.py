@@ -21,7 +21,7 @@ from .audio import (
     play_head_drop_alert, shutdown_audio,
 )
 from .ear import eye_aspect_ratio
-from .mar import mouth_aspect_ratio
+# from .mar import mouth_aspect_ratio
 from .gaze import head_pose_angles, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
@@ -88,6 +88,15 @@ def _check_model() -> None:
             sys.exit(1)
 
 
+
+def _get_jaw_open(face_results) -> float:
+    if not face_results.face_blendshapes:
+        return 0.0
+    for b in face_results.face_blendshapes[0]:
+        if b.category_name == "jawOpen":
+            return b.score
+    return 0.0
+
 def _build_face_landmarker():
     import mediapipe as mp
     from mediapipe.tasks import python
@@ -99,7 +108,7 @@ def _build_face_landmarker():
         base_options=base_options,
         running_mode=vision.RunningMode.VIDEO,
         num_faces=1,
-        output_face_blendshapes=False,
+        output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
@@ -231,7 +240,7 @@ def run() -> None:
     no_face_streak = 0
 
     yawn_counter = 0
-    small_yawn_counter = 0
+    # small_yawn_counter = 0
     yawn_count = 0
     last_yawn_alert = 0.0
     # Trailing "mouth open" history, used to tell one sustained yawn apart
@@ -308,12 +317,13 @@ def run() -> None:
                 left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
                 right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
                 current_ear = (left_ear + right_ear) / 2.0
-                current_mar = mouth_aspect_ratio(
-                    landmarks,
-                    config.MOUTH_TOP, config.MOUTH_BOTTOM,
-                    config.MOUTH_LEFT, config.MOUTH_RIGHT,
-                    w, h,
-                )
+                # current_mar = mouth_aspect_ratio(
+                #     landmarks,
+                #     config.MOUTH_TOP, config.MOUTH_BOTTOM,
+                #     config.MOUTH_LEFT, config.MOUTH_RIGHT,
+                #     w, h,
+                # )
+                current_mar = _get_jaw_open(face_results)
                 if face_results.facial_transformation_matrixes:
                     pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
                     if pose_angles:
@@ -357,8 +367,8 @@ def run() -> None:
 
                 # Yawn oscillation check: count mouth-open rising edges in the
                 # trailing window to catch talking/laughing/singing.
-                mouth_open_loose = current_mar > config.MAR_LOW_THRESHOLD
-                mouth_open_history.append(mouth_open_loose)
+                mouth_open = current_mar > config.MAR_THRESHOLD
+                mouth_open_history.append(mouth_open)
                 rising_edges = sum(
                     1 for i in range(1, len(mouth_open_history))
                     if mouth_open_history[i] and not mouth_open_history[i - 1]
@@ -367,10 +377,8 @@ def run() -> None:
 
                 if is_oscillating:
                     yawn_counter = 0
-                    small_yawn_counter = 0
                 else:
-                    yawn_counter = yawn_counter + 1 if current_mar > config.MAR_THRESHOLD else max(0, yawn_counter - 1)
-                    small_yawn_counter = small_yawn_counter + 1 if mouth_open_loose else max(0, small_yawn_counter - 1)
+                    yawn_counter = yawn_counter + 1 if mouth_open else max(0, yawn_counter - 1)
             else:
                 no_face_streak += 1
                 # Tolerate brief tracking loss before decaying -- otherwise a
@@ -378,7 +386,7 @@ def run() -> None:
                 if no_face_streak > config.NO_FACE_GRACE_FRAMES:
                     counter = max(0, counter - 1)
                     yawn_counter = max(0, yawn_counter - 1)
-                    small_yawn_counter = max(0, small_yawn_counter - 1)
+                    # small_yawn_counter = max(0, small_yawn_counter - 1)
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
 
@@ -395,7 +403,6 @@ def run() -> None:
             # ── Yawn alert (mouth): a clear big yawn OR a sustained small yawn ──
             yawn_confirmed = (
                 yawn_counter >= config.YAWN_CONSEC_FRAMES
-                or small_yawn_counter >= config.MAR_LOW_CONSEC_FRAMES
             )
             if yawn_confirmed and now - last_yawn_alert > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
@@ -447,7 +454,7 @@ def run() -> None:
             # ── Display ──
             if display_on:
                 is_drowsy = counter >= config.CONSEC_FRAMES
-                is_yawning = yawn_counter >= config.YAWN_CONSEC_FRAMES or small_yawn_counter >= config.MAR_LOW_CONSEC_FRAMES
+                is_yawning = yawn_counter >= config.YAWN_CONSEC_FRAMES 
 
                 GREEN = (0, 255, 0)
                 ORANGE = (0, 165, 255)
@@ -458,7 +465,7 @@ def run() -> None:
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
-                mar_text = f"MAR: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
+                mar_text = f"JawOpen: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{config.HEAD_DROP_HOLD_FRAMES})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
