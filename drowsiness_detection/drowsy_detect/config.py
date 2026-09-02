@@ -47,9 +47,9 @@ NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start deca
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.4          # mouth-open ratio above which counts as "open"
+MAR_THRESHOLD = 0.5          # mouth-open ratio above which counts as "open"
 YAWN_CONSEC_FRAMES = 10      # ~0.6-0.7s at 30fps held open before it's a yawn
-YAWN_COOLDOWN_SEC = 4.0
+YAWN_COOLDOWN_SEC = 0.5
 
 # Looser threshold for small/suppressed yawns, held longer to compensate.
 MAR_LOW_THRESHOLD = 0.45
@@ -91,16 +91,16 @@ CHIN_IDX = 152
 
 # A real head drop is fast; slowly leaning down to check a phone shouldn't
 # count. Window over which the "how fast" rise is measured.
-HEAD_DROP_WINDOW_SEC = 1.0
+HEAD_DROP_WINDOW_SEC = 0.5
 HEAD_DROP_DELTA = 0.12   # min pitch-ratio rise within the window to count as "sudden"
 
-HEAD_DROP_SMOOTHING_ALPHA = 0.5   # EMA factor; damps landmark jitter
+HEAD_DROP_SMOOTHING_ALPHA = 0.8   # EMA factor; damps landmark jitter
 
 # "Head is down" threshold, and how long it must hold past that to count as
 # a real drop rather than a quick glance or self-correcting nod.
 PITCH_RATIO_DOWN = 0.62
-HEAD_DROP_HOLD_FRAMES = 18
-HEAD_DROP_COOLDOWN_SEC = 4.0
+HEAD_DROP_HOLD_FRAMES = 4
+HEAD_DROP_COOLDOWN_SEC = 1.0
 
 # ─────────────────────────────────────────────
 # Phone-use detection (YOLO ONNX)
@@ -146,7 +146,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 4   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0

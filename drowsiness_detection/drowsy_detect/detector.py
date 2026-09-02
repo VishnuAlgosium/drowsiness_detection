@@ -21,7 +21,7 @@ from .audio import (
     play_head_drop_alert, shutdown_audio,
 )
 from .ear import eye_aspect_ratio
-# from .mar import mouth_aspect_ratio
+from .mar import mouth_aspect_ratio
 from .gaze import head_pose_angles, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
@@ -262,7 +262,8 @@ def run() -> None:
     smoothed_pitch_ratio = None
     # Trailing pitch history, used to check the drop happened quickly rather
     # than a slow, deliberate lean (e.g. checking a lap or console).
-    pitch_history = deque(maxlen=max(2, int(config.CAM_FPS * config.HEAD_DROP_WINDOW_SEC)))
+    # pitch_history = deque(maxlen=max(2, int(config.CAM_FPS * config.HEAD_DROP_WINDOW_SEC)))
+    pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
 
     frame_num = 0
 
@@ -277,6 +278,8 @@ def run() -> None:
                 break
 
             frame_start = time.perf_counter()
+            now = time.time()   # ADD THIS — needed early for pitch_history timestamps
+
             ret, frame = cap.read()
 
             if not ret:
@@ -317,13 +320,14 @@ def run() -> None:
                 left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
                 right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
                 current_ear = (left_ear + right_ear) / 2.0
-                # current_mar = mouth_aspect_ratio(
-                #     landmarks,
-                #     config.MOUTH_TOP, config.MOUTH_BOTTOM,
-                #     config.MOUTH_LEFT, config.MOUTH_RIGHT,
-                #     w, h,
-                # )
-                current_mar = _get_jaw_open(face_results)
+                current_mar = mouth_aspect_ratio(
+                    landmarks,
+                    config.MOUTH_TOP, config.MOUTH_BOTTOM,
+                    config.MOUTH_LEFT, config.MOUTH_RIGHT,
+                    w, h,
+                )
+                # current_mar = _get_jaw_open(face_results)
+                print(f"EAR: {current_ear:.3f} MAR: {current_mar:.3f}")
                 if face_results.facial_transformation_matrixes:
                     pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
                     if pose_angles:
@@ -349,7 +353,10 @@ def run() -> None:
                     config.HEAD_DROP_SMOOTHING_ALPHA * current_pitch_ratio
                     + (1 - config.HEAD_DROP_SMOOTHING_ALPHA) * smoothed_pitch_ratio
                 )
-                pitch_history.append(smoothed_pitch_ratio)
+                # pitch_history.append(smoothed_pitch_ratio)
+                pitch_history.append((now, smoothed_pitch_ratio))
+                while pitch_history and now - pitch_history[0][0] > config.HEAD_DROP_WINDOW_SEC:
+                    pitch_history.popleft()
 
                 is_head_down = smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
                 head_drop_counter = head_drop_counter + 1 if is_head_down else max(0, head_drop_counter - 1)
@@ -389,6 +396,7 @@ def run() -> None:
                     # small_yawn_counter = max(0, small_yawn_counter - 1)
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
+                    pitch_history.clear()  # NEW: stale pre-loss values shouldn't feed pitch_rise after tracking resumes
 
             now = time.time()
 
@@ -426,7 +434,9 @@ def run() -> None:
                 last_gaze_alert = now
 
             # ── Head drop alert (sudden nod, held down) ──
-            pitch_rise = smoothed_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
+            # pitch_rise = smoothed_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
+            window_full = bool(pitch_history) and (now - pitch_history[0][0]) >= config.HEAD_DROP_WINDOW_SEC * 0.9
+            pitch_rise = (smoothed_pitch_ratio - min(v for _, v in pitch_history)) if window_full else 0.0
             head_drop_confirmed = head_drop_counter >= config.HEAD_DROP_HOLD_FRAMES and pitch_rise >= config.HEAD_DROP_DELTA
             if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
                 head_drop_count += 1
