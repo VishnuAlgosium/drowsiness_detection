@@ -31,17 +31,12 @@ def _beep(freq: float = 880, dur: float = 0.28, vol: float = 0.6, sr: int = 4410
     return (wave * env * vol * 32767).astype(np.int16)
 
 
-# Keep a module-level reference so Sound objects aren't garbage-collected
-# mid-playback (SDL mixer holds the buffer, but there's no reason to risk it).
+# Module-level reference so Sound objects aren't garbage-collected mid-playback.
 _last_sound = None
 
 
 def _play_sequence(seq: np.ndarray) -> None:
-    """
-    Fire-and-forget: starts playback and returns immediately. Playback happens
-    on pygame/SDL's own audio thread, so this does NOT block the caller's main
-    loop (camera capture / display / keyboard polling keep running while it plays).
-    """
+    """Fire-and-forget playback on pygame/SDL's own audio thread; doesn't block the main loop."""
     global _last_sound
 
     if not AUDIO_AVAILABLE:
@@ -51,8 +46,6 @@ def _play_sequence(seq: np.ndarray) -> None:
     try:
         _last_sound = pygame.sndarray.make_sound(seq)
         _last_sound.play()
-        # No busy-wait here — that was what froze the video feed during alerts.
-
     except Exception as e:
         print(f"[WARN] Audio error: {e}")
 
@@ -69,13 +62,13 @@ def play_alert() -> None:
 
 
 def play_yawn_alert() -> None:
-    """Distinct single, lower-pitched tone used for yawn detection."""
+    """Single, lower-pitched tone used for yawn detection."""
     seq = _beep(440, 0.35, vol=0.5)
     _play_sequence(seq)
 
 
 def play_phone_alert() -> None:
-    """Distinct triple, higher-pitched tone used for phone-use detection."""
+    """Triple, higher-pitched tone used for phone-use detection."""
     silence = np.zeros(int(44100 * 0.08), dtype=np.int16)
     beep = _beep(1200, 0.15, vol=0.5)
     seq = np.concatenate([beep, silence, beep, silence, beep])
@@ -83,7 +76,7 @@ def play_phone_alert() -> None:
 
 
 def play_distraction_alert() -> None:
-    """Distinct double, mid-pitched tone used for distraction (gaze away / low-confidence phone)."""
+    """Double, mid-pitched tone used for distraction (gaze away / low-confidence phone)."""
     silence = np.zeros(int(44100 * 0.12), dtype=np.int16)
     beep = _beep(750, 0.25, vol=0.55)
     seq = np.concatenate([beep, silence, beep])
@@ -91,7 +84,7 @@ def play_distraction_alert() -> None:
 
 
 def play_head_drop_alert() -> None:
-    """Distinct fast, descending three-tone alert used for a sudden head drop (nodding off)."""
+    """Fast, descending three-tone alert used for a sudden head drop (nodding off)."""
     b1 = _beep(1000, 0.12, vol=0.6)
     b2 = _beep(750, 0.12, vol=0.6)
     b3 = _beep(500, 0.18, vol=0.65)

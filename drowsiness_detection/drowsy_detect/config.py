@@ -47,24 +47,30 @@ NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start deca
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.5          # mouth-open ratio above which counts as "open"
-YAWN_CONSEC_FRAMES = 10      # ~0.6-0.7s at 30fps held open before it's a yawn
+MAR_THRESHOLD = 0.3          # mouth-open ratio above which counts as "open"
+MAR_SMOOTHING_ALPHA = 0.4    # EMA factor; damps landmark jitter around the threshold
+YAWN_HOLD_SEC = 1.0          # seconds mouth must stay open continuously to count as a yawn
 YAWN_COOLDOWN_SEC = 0.5
-
-# Looser threshold for small/suppressed yawns, held longer to compensate.
-MAR_LOW_THRESHOLD = 0.45
-MAR_LOW_CONSEC_FRAMES = 35
 
 # Oscillation filter: a yawn is one open->hold->close; talking/laughing/singing
 # opens and closes repeatedly. Reject if rising edges exceed this in the window.
 YAWN_TRANSITION_WINDOW = 30
 YAWN_MAX_TRANSITIONS = 1
 
+# Optional smile/laugh rejection, off by default -- experimental, validate
+# against real footage before enabling.
+YAWN_REQUIRE_SYMMETRIC = True
+YAWN_SYMMETRY_MAX_OFFSET = 0.25
+
 # MediaPipe mouth landmarks: top inner lip, bottom inner lip, left corner, right corner
 MOUTH_TOP = 13
 MOUTH_BOTTOM = 14
 MOUTH_LEFT = 78
 MOUTH_RIGHT = 308
+
+# Outer corners, used only for the symmetry check above.
+MOUTH_OUTER_LEFT = 61
+MOUTH_OUTER_RIGHT = 291
 
 # ─────────────────────────────────────────────
 # Distraction detection (head pose + low-confidence phone)
@@ -73,11 +79,12 @@ MOUTH_RIGHT = 308
 NOSE_TIP_IDX = 1
 
 # Tolerance around the calibrated baseline (see _calibrate_baseline in
-# detector.py), not absolute zero -- an off-center mount (e.g. A-pillar)
-# means "forward" itself sits at an offset.
+# detector.py), since an off-center mount means "forward" isn't 0 degrees.
 YAW_ANGLE_MAX = 20.0
 PITCH_ANGLE_MAX = 20.0
 ROLL_ANGLE_MAX = 25.0
+
+
 
 DISTRACTION_HOLD_SEC = 0.5   # look-away hold time in real seconds (fps-independent)
 DISTRACTION_COOLDOWN_SEC = 4.0
@@ -96,8 +103,8 @@ HEAD_DROP_DELTA = 0.12   # min pitch-ratio rise within the window to count as "s
 
 HEAD_DROP_SMOOTHING_ALPHA = 0.8   # EMA factor; damps landmark jitter
 
-# "Head is down" threshold, and how long it must hold past that to count as
-# a real drop rather than a quick glance or self-correcting nod.
+# "Head is down" threshold, and how long it must hold to count as a real
+# drop rather than a quick glance or self-correcting nod.
 PITCH_RATIO_DOWN = 0.62
 HEAD_DROP_HOLD_FRAMES = 4
 HEAD_DROP_COOLDOWN_SEC = 1.0
@@ -117,7 +124,7 @@ PHONE_MODEL_PATH = os.path.join(
 )
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
-PHONE_CONF_THRESHOLD = 0.5
+PHONE_CONF_THRESHOLD = 0.7
 PHONE_CONFIRM_FRAMES = 3
 PHONE_CONFIRM_WINDOW = 5
 PHONE_COOLDOWN_SEC = 5.0
@@ -127,7 +134,7 @@ PHONE_DETECT_EVERY_N_FRAMES = 3
 
 # Low-confidence tier for occluded/edge-on/calling-position views; needs a
 # longer sustained window since one low-confidence frame is unreliable.
-PHONE_LOW_CONF_THRESHOLD = 0.30
+PHONE_LOW_CONF_THRESHOLD = 1.0
 PHONE_LOW_CONF_WINDOW = 10
 PHONE_LOW_CONF_FRAMES = 7
 
@@ -135,8 +142,7 @@ PHONE_LOW_CONF_FRAMES = 7
 # Display defaults
 # ─────────────────────────────────────────────
 
-# Off by default on headless edge devices without a display; toggle with 'v'.
-DISPLAY_ON_START = True
+DISPLAY_ON_START = True   # off by default on headless edge devices; toggle with 'v'
 
 # ─────────────────────────────────────────────
 # Camera
@@ -146,7 +152,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 4   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0

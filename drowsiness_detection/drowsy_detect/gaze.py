@@ -2,12 +2,8 @@
 gaze.py
 -------
 Head-orientation estimates from MediaPipe face landmarks:
-  - head_pose_angles: yaw/pitch/roll from MediaPipe's own facial
-    transformation matrix (output_facial_transformation_matrixes=True),
-    used for distraction (sustained look-away in any direction). This uses
-    MediaPipe's internal pose solve across all face landmarks rather than a
-    hand-picked few points, which avoids the correspondence/flip issues a
-    manual solvePnP setup is prone to.
+  - head_pose_angles: yaw/pitch/roll from MediaPipe's facial transformation
+    matrix, used for distraction (sustained look-away in any direction).
   - head_pitch_ratio: 2D vertical ratio, used for sudden head drop (nodding
     off) since that check only needs relative "how far down", not degrees.
 """
@@ -34,10 +30,9 @@ def _euler_from_rotation_matrix(r: np.ndarray) -> Tuple[float, float, float]:
     """
     Decompose a rotation matrix into yaw/pitch/roll degrees.
 
-    MediaPipe's facial transformation matrix uses a different axis layout
-    than the standard OpenCV camera convention a "textbook" Euler-angle
-    formula assumes -- confirmed empirically: a real head turn (yaw) was
-    showing up entirely as a pitch reading, and vice versa. Swapped below.
+    MediaPipe's axis layout differs from the standard OpenCV convention a
+    textbook Euler formula assumes, so yaw/pitch are swapped below (confirmed
+    empirically against real head turns).
     """
     sy = math.sqrt(r[0, 0] ** 2 + r[1, 0] ** 2)
 

@@ -6,9 +6,8 @@ alerting. Two confidence tiers:
 
   - High tier: clear view, fires a "phone_detected" alert.
   - Low tier: occluded/edge-on/calling-position views, needs a longer
-    sustained window since a single low-confidence frame is unreliable.
-    Fires a "distraction_detected" alert instead of a phone alert, since a
-    low-confidence hit is as likely to be some other handheld object.
+    sustained window and fires a "distraction_detected" alert instead,
+    since a single low-confidence hit is as likely to be another object.
 
 Inference only runs every config.PHONE_DETECT_EVERY_N_FRAMES frames, since
 YOLO on CPU is much heavier than the MediaPipe face landmarker.
@@ -36,8 +35,8 @@ class PhoneDetector:
                 f"'{config.PHONE_CLASS_NAME}' not found in model classes: {self.model.names}"
             )
 
-        self.confirm_buffer = deque(maxlen=config.PHONE_CONFIRM_WINDOW)      # high-confidence tier
-        self.low_conf_buffer = deque(maxlen=config.PHONE_LOW_CONF_WINDOW)    # low-confidence tier
+        self.confirm_buffer = deque(maxlen=config.PHONE_CONFIRM_WINDOW)
+        self.low_conf_buffer = deque(maxlen=config.PHONE_LOW_CONF_WINDOW)
 
         self.last_alert_time = 0.0
         self.alert_count = 0
@@ -46,9 +45,7 @@ class PhoneDetector:
         self.distraction_count = 0
 
         self.frame_num = 0
-
-        # Cached between skipped frames so the on-screen box doesn't flicker.
-        self.last_results = None
+        self.last_results = None  # cached between skipped frames so the box doesn't flicker
 
     def process(self, frame, now: float):
         """

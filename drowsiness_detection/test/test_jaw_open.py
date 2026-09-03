@@ -229,7 +229,7 @@ def _open_camera():
     if rtsp_url:
         cap = cv2.VideoCapture(rtsp_url)
     else:
-        cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_V4L2)
+        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
@@ -241,7 +241,7 @@ def _open_camera():
 def main():
     parser = argparse.ArgumentParser(description="MAR-only yawn detection test")
     parser.add_argument("--model", type=str,
-                         default="drowsiness_detection/models/face_landmarker.task",
+                         default="../models/face_landmarker.task",
                          help="Path to MediaPipe face_landmarker .task model")
     parser.add_argument("--threshold", type=float, default=.35,
                          help="MAR above this counts as mouth-open (default 0.6; "

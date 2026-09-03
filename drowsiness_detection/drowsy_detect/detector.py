@@ -21,7 +21,7 @@ from .audio import (
     play_head_drop_alert, shutdown_audio,
 )
 from .ear import eye_aspect_ratio
-from .mar import mouth_aspect_ratio
+from .mar import mouth_aspect_ratio, mouth_corner_symmetry
 from .gaze import head_pose_angles, head_pitch_ratio
 from .phone import PhoneDetector
 from .display import LazyDisplay
@@ -40,9 +40,8 @@ def _handle_sigterm(signum, frame) -> None:
 
 class MonotonicTimestamp:
     """Strictly increasing ms timestamps for MediaPipe's VIDEO mode, which
-    requires each timestamp to exceed the last. Wall-clock time (time.time())
-    can jump backward on NTP sync, which is common right after boot on a
-    device with no RTC -- time.monotonic() never does."""
+    requires each timestamp to exceed the last. Wall-clock time can jump
+    backward on NTP sync; time.monotonic() never does."""
 
     def __init__(self):
         self._last_ms = -1
@@ -87,15 +86,6 @@ def _check_model() -> None:
                   "config.PHONE_DETECTION_ENABLED = False to run drowsiness/yawn only.")
             sys.exit(1)
 
-
-
-def _get_jaw_open(face_results) -> float:
-    if not face_results.face_blendshapes:
-        return 0.0
-    for b in face_results.face_blendshapes[0]:
-        if b.category_name == "jawOpen":
-            return b.score
-    return 0.0
 
 def _build_face_landmarker():
     import mediapipe as mp
@@ -153,9 +143,8 @@ def _calibrate_baseline(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
     Sample EAR and head pose for config.EAR_CALIBRATION_FRAMES frames while
     the driver looks at the road normally, and derive:
       - a personal EAR threshold (eye shape varies per person)
-      - a yaw/pitch/roll baseline ("forward" isn't 0 degrees unless the
-        camera is mounted dead-center in front of the driver's face -- an
-        A-pillar or off-center mount needs this offset subtracted out)
+      - a yaw/pitch/roll baseline (an off-center camera mount means
+        "forward" isn't 0 degrees, so the offset needs subtracting out)
 
     Falls back to config.EAR_THRESHOLD and a zero gaze baseline if no face
     is found, or if none shows up within the timeout.
@@ -239,12 +228,11 @@ def run() -> None:
     smoothed_ear = None
     no_face_streak = 0
 
-    yawn_counter = 0
-    # small_yawn_counter = 0
+    smoothed_mar = None
+    mouth_open_start = None   # wall-clock time MAR first crossed MAR_THRESHOLD, or None
     yawn_count = 0
     last_yawn_alert = 0.0
-    # Trailing "mouth open" history, used to tell one sustained yawn apart
-    # from the repeated open/close of talking, laughing, or singing.
+    last_yawn_confirmed = False   # previous frame's yawn_confirmed, to count on rising edge only
     mouth_open_history = deque(maxlen=config.YAWN_TRANSITION_WINDOW)
 
     gaze_away_start = None
@@ -260,9 +248,6 @@ def run() -> None:
     last_head_drop_alert = 0.0
     current_pitch_ratio = 0.5
     smoothed_pitch_ratio = None
-    # Trailing pitch history, used to check the drop happened quickly rather
-    # than a slow, deliberate lean (e.g. checking a lap or console).
-    # pitch_history = deque(maxlen=max(2, int(config.CAM_FPS * config.HEAD_DROP_WINDOW_SEC)))
     pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
 
     frame_num = 0
@@ -278,7 +263,7 @@ def run() -> None:
                 break
 
             frame_start = time.perf_counter()
-            now = time.time()   # ADD THIS — needed early for pitch_history timestamps
+            now = time.time()
 
             ret, frame = cap.read()
 
@@ -305,13 +290,13 @@ def run() -> None:
             frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
 
-            # ── Face landmarks -> EAR (drowsiness) + MAR (yawn) ──
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
             current_ear = 0.0
             current_mar = 0.0
+            current_symmetry = 0.0
 
             if face_results.face_landmarks:
                 landmarks = face_results.face_landmarks[0]
@@ -326,8 +311,16 @@ def run() -> None:
                     config.MOUTH_LEFT, config.MOUTH_RIGHT,
                     w, h,
                 )
-                # current_mar = _get_jaw_open(face_results)
-                print(f"EAR: {current_ear:.3f} MAR: {current_mar:.3f}")
+
+                # Smooth MAR so a single noisy frame at the threshold can't flip mouth-open state.
+                smoothed_mar = current_mar if smoothed_mar is None else (
+                    config.MAR_SMOOTHING_ALPHA * current_mar
+                    + (1 - config.MAR_SMOOTHING_ALPHA) * smoothed_mar
+                )
+                current_symmetry = mouth_corner_symmetry(
+                    landmarks, config.MOUTH_TOP, config.MOUTH_BOTTOM,
+                    config.MOUTH_OUTER_LEFT, config.MOUTH_OUTER_RIGHT, w, h,
+                )
                 if face_results.facial_transformation_matrixes:
                     pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
                     if pose_angles:
@@ -347,13 +340,11 @@ def run() -> None:
                 current_pitch_ratio = head_pitch_ratio(
                     landmarks, config.FOREHEAD_IDX, config.CHIN_IDX, config.NOSE_TIP_IDX
                 )
-                # Smooth so a single noisy/landmark-jitter frame can't
-                # register on its own as a "sudden" drop.
+                # Smooth so a single noisy landmark frame can't register as a "sudden" drop.
                 smoothed_pitch_ratio = current_pitch_ratio if smoothed_pitch_ratio is None else (
                     config.HEAD_DROP_SMOOTHING_ALPHA * current_pitch_ratio
                     + (1 - config.HEAD_DROP_SMOOTHING_ALPHA) * smoothed_pitch_ratio
                 )
-                # pitch_history.append(smoothed_pitch_ratio)
                 pitch_history.append((now, smoothed_pitch_ratio))
                 while pitch_history and now - pitch_history[0][0] > config.HEAD_DROP_WINDOW_SEC:
                     pitch_history.popleft()
@@ -372,9 +363,8 @@ def run() -> None:
                 eyes_closed = smoothed_ear < ear_threshold and eyes_agree
                 counter = counter + 1 if eyes_closed else max(0, counter - 1)
 
-                # Yawn oscillation check: count mouth-open rising edges in the
-                # trailing window to catch talking/laughing/singing.
-                mouth_open = current_mar > config.MAR_THRESHOLD
+                # Count mouth-open rising edges in the trailing window to catch talking/laughing/singing.
+                mouth_open = smoothed_mar > config.MAR_THRESHOLD
                 mouth_open_history.append(mouth_open)
                 rising_edges = sum(
                     1 for i in range(1, len(mouth_open_history))
@@ -382,21 +372,21 @@ def run() -> None:
                 )
                 is_oscillating = rising_edges > config.YAWN_MAX_TRANSITIONS
 
-                if is_oscillating:
-                    yawn_counter = 0
+                # A yawn is one continuous mouth-open stretch; oscillation restarts the hold.
+                if mouth_open and not is_oscillating:
+                    if mouth_open_start is None:
+                        mouth_open_start = now
                 else:
-                    yawn_counter = yawn_counter + 1 if mouth_open else max(0, yawn_counter - 1)
+                    mouth_open_start = None
             else:
                 no_face_streak += 1
-                # Tolerate brief tracking loss before decaying -- otherwise a
-                # single dropped frame wipes out real progress toward an alert.
+                # Tolerate brief tracking loss before decaying counters.
                 if no_face_streak > config.NO_FACE_GRACE_FRAMES:
                     counter = max(0, counter - 1)
-                    yawn_counter = max(0, yawn_counter - 1)
-                    # small_yawn_counter = max(0, small_yawn_counter - 1)
+                    mouth_open_start = None
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
-                    pitch_history.clear()  # NEW: stale pre-loss values shouldn't feed pitch_rise after tracking resumes
+                    pitch_history.clear()
 
             now = time.time()
 
@@ -408,16 +398,21 @@ def run() -> None:
                 log_alert("drowsiness_detected", {"ear": round(current_ear, 3)})
                 last_alert = now
 
-            # ── Yawn alert (mouth): a clear big yawn OR a sustained small yawn ──
-            yawn_confirmed = (
-                yawn_counter >= config.YAWN_CONSEC_FRAMES
+            # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
+            yawn_held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
+            symmetry_ok = (
+                not config.YAWN_REQUIRE_SYMMETRIC
+                or current_symmetry > -config.YAWN_SYMMETRY_MAX_OFFSET
             )
-            if yawn_confirmed and now - last_yawn_alert > config.YAWN_COOLDOWN_SEC:
+            yawn_confirmed = yawn_held_sec >= config.YAWN_HOLD_SEC and symmetry_ok
+            # Count on rising edge only, so one long yawn doesn't retrigger every cooldown window.
+            if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_alert > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
                 print(f"[YAWN #{yawn_count}] Yawn detected MAR={current_mar:.3f}")
                 play_yawn_alert()
                 log_alert("yawn_detected", {"mar": round(current_mar, 3)})
                 last_yawn_alert = now
+            last_yawn_confirmed = yawn_confirmed
 
             # ── Distraction alert (sustained look-away) ──
             gaze_away_elapsed = (now - gaze_away_start) if gaze_away_start is not None else 0.0
@@ -434,7 +429,6 @@ def run() -> None:
                 last_gaze_alert = now
 
             # ── Head drop alert (sudden nod, held down) ──
-            # pitch_rise = smoothed_pitch_ratio - min(pitch_history) if len(pitch_history) == pitch_history.maxlen else 0.0
             window_full = bool(pitch_history) and (now - pitch_history[0][0]) >= config.HEAD_DROP_WINDOW_SEC * 0.9
             pitch_rise = (smoothed_pitch_ratio - min(v for _, v in pitch_history)) if window_full else 0.0
             head_drop_confirmed = head_drop_counter >= config.HEAD_DROP_HOLD_FRAMES and pitch_rise >= config.HEAD_DROP_DELTA
@@ -464,7 +458,7 @@ def run() -> None:
             # ── Display ──
             if display_on:
                 is_drowsy = counter >= config.CONSEC_FRAMES
-                is_yawning = yawn_counter >= config.YAWN_CONSEC_FRAMES 
+                is_yawning = yawn_confirmed
 
                 GREEN = (0, 255, 0)
                 ORANGE = (0, 165, 255)
@@ -475,7 +469,7 @@ def run() -> None:
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
-                mar_text = f"JawOpen: {current_mar:.3f} ({yawn_counter}/{config.YAWN_CONSEC_FRAMES})  Yawns:{yawn_count}"
+                mar_text = f"MAR: {current_mar:.3f}  Held:{yawn_held_sec:.1f}s/{config.YAWN_HOLD_SEC:.1f}s  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{config.HEAD_DROP_HOLD_FRAMES})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
