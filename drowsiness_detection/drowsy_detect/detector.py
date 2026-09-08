@@ -18,11 +18,12 @@ from . import config
 from .alerts import log_alert, FrameLogger, cleanup_old_logs
 from .audio import (
     play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
-    play_head_drop_alert, shutdown_audio,
+    play_head_drop_alert, play_occlusion_alert, shutdown_audio,
 )
 from .ear import eye_aspect_ratio
 from .mar import mouth_aspect_ratio, mouth_corner_symmetry
 from .gaze import head_pose_angles, head_pitch_ratio
+from .blink_visibility import BlinkVisibilityMonitor
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
@@ -227,6 +228,12 @@ def run() -> None:
     last_alert = 0.0
     smoothed_ear = None
     no_face_streak = 0
+    eyes_occluded = False
+    occlusion_alert_count = 0
+    last_occlusion_alert = 0.0
+    blink_monitor = BlinkVisibilityMonitor(
+        config.NO_BLINK_TIMEOUT_SEC, ear_threshold, config.MAX_BLINK_FRAMES
+    )
 
     smoothed_mar = None
     mouth_open_start = None   # wall-clock time MAR first crossed MAR_THRESHOLD, or None
@@ -357,6 +364,7 @@ def run() -> None:
                     config.EAR_SMOOTHING_ALPHA * current_ear
                     + (1 - config.EAR_SMOOTHING_ALPHA) * smoothed_ear
                 )
+                eyes_occluded = blink_monitor.update(now, current_ear)
 
                 # Both eyes must agree they're closed -- rejects winks/side glances.
                 eyes_agree = abs(left_ear - right_ear) < config.EAR_ASYMMETRY_MAX
@@ -387,16 +395,30 @@ def run() -> None:
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
                     pitch_history.clear()
+                    blink_monitor.reset()
+                    eyes_occluded = False
 
             now = time.time()
 
             # ── Drowsiness alert (eyes) ──
-            if counter >= config.CONSEC_FRAMES and now - last_alert > config.ALERT_COOLDOWN_SEC:
+            # Skipped while eyes_occluded: EAR is unreliable, so head-drop
+            # (tightened below) becomes the primary fallback signal.
+            if counter >= config.CONSEC_FRAMES and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
                 alert_count += 1
                 print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f}")
                 play_alert()
                 log_alert("drowsiness_detected", {"ear": round(current_ear, 3)})
                 last_alert = now
+
+            # ── Eye-occlusion alert (eyes hidden from camera, e.g. sunglasses) ──
+            # Repeats periodically while occlusion persists, so a single
+            # notice early in a long drive doesn't go unnoticed.
+            if eyes_occluded and now - last_occlusion_alert > config.OCCLUSION_ALERT_REPEAT_SEC:
+                occlusion_alert_count += 1
+                print(f"[OCCLUSION #{occlusion_alert_count}] Eyes hidden from camera EAR={current_ear:.3f}")
+                play_occlusion_alert()
+                log_alert("eyes_occluded", {"ear": round(current_ear, 3)})
+                last_occlusion_alert = now
 
             # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
             yawn_held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
@@ -429,9 +451,14 @@ def run() -> None:
                 last_gaze_alert = now
 
             # ── Head drop alert (sudden nod, held down) ──
+            # Shorter hold required while eyes are occluded, since head-drop
+            # is the primary fallback signal when EAR can't be trusted.
+            head_drop_hold_frames = (
+                config.OCCLUSION_HEAD_DROP_HOLD_FRAMES if eyes_occluded else config.HEAD_DROP_HOLD_FRAMES
+            )
             window_full = bool(pitch_history) and (now - pitch_history[0][0]) >= config.HEAD_DROP_WINDOW_SEC * 0.9
             pitch_rise = (smoothed_pitch_ratio - min(v for _, v in pitch_history)) if window_full else 0.0
-            head_drop_confirmed = head_drop_counter >= config.HEAD_DROP_HOLD_FRAMES and pitch_rise >= config.HEAD_DROP_DELTA
+            head_drop_confirmed = head_drop_counter >= head_drop_hold_frames and pitch_rise >= config.HEAD_DROP_DELTA
             if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
                 head_drop_count += 1
                 print(f"[HEAD DROP #{head_drop_count}] pitch_ratio={current_pitch_ratio:.3f} rise={pitch_rise:.3f}")
@@ -468,10 +495,11 @@ def run() -> None:
                 is_head_down = smoothed_pitch_ratio is not None and smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
-                ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}"
+                occlusion_text = " [EYES OCCLUDED]" if eyes_occluded else ""
+                ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}{occlusion_text}"
                 mar_text = f"MAR: {current_mar:.3f}  Held:{yawn_held_sec:.1f}s/{config.YAWN_HOLD_SEC:.1f}s  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
-                pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{config.HEAD_DROP_HOLD_FRAMES})  HeadDrops:{head_drop_count}"
+                pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{head_drop_hold_frames})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
@@ -519,6 +547,7 @@ def run() -> None:
     total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
     print(
         f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
-        f"  Distractions: {total_distractions}  Head drops: {head_drop_count}{phone_summary}"
+        f"  Distractions: {total_distractions}  Head drops: {head_drop_count}"
+        f"  Occlusion alerts: {occlusion_alert_count}{phone_summary}"
     )
     print(f"[INFO] Per-frame log saved to {frame_log.path}")

@@ -3,11 +3,12 @@ audio.py
 --------
 Pygame-based beep alerts. Each detector gets its own distinct tone so an
 alert can be identified by ear alone:
-    drowsiness  -> two-tone, low-pitched
+    drowsiness  -> two-tone, low-pitched, descending
     yawn        -> single, low-pitched
     phone       -> triple, high-pitched
     distraction -> double, mid-pitched
     head drop   -> fast three-tone descending sweep
+    occlusion   -> two-tone, mid-pitched, ascending (eyes hidden from camera)
 """
 
 import numpy as np
@@ -89,6 +90,16 @@ def play_head_drop_alert() -> None:
     b2 = _beep(750, 0.12, vol=0.6)
     b3 = _beep(500, 0.18, vol=0.65)
     seq = np.concatenate([b1, b2, b3])
+    _play_sequence(seq)
+
+
+def play_occlusion_alert() -> None:
+    """Rising two-tone reminder used when the eyes are hidden from the camera
+    (e.g. sunglasses), so EAR-based drowsiness detection can't be trusted."""
+    silence = np.zeros(int(44100 * 0.1), dtype=np.int16)
+    b1 = _beep(500, 0.25, vol=0.5)
+    b2 = _beep(700, 0.25, vol=0.5)
+    seq = np.concatenate([b1, silence, b2])
     _play_sequence(seq)
 
 

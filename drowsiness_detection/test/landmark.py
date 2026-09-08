@@ -38,7 +38,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 MODEL_PATH = "/home/megha/Downloads/face_landmarker.task"  # <-- update if needed
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 2
 FRAME_WIDTH = 900
 
 DOT_RADIUS_DEFAULT = 1
