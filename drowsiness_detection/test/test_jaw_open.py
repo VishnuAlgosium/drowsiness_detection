@@ -44,6 +44,9 @@ from drowsiness_detection.drowsy_detect import config
 from drowsiness_detection.drowsy_detect.display import LazyDisplay
 from drowsiness_detection.drowsy_detect.keyboard_input import KeyReader
 
+import math
+
+
 # Inner lips -- the vertical gap between these two points is what MAR
 # measures growing as the jaw drops.
 INNER_LIPS_TOP = 13
@@ -53,6 +56,76 @@ INNER_LIPS_BOTTOM = 14
 # vertical gap is judged relative to face/mouth scale, not raw pixels.
 MOUTH_LEFT_CORNER = 61
 MOUTH_RIGHT_CORNER = 291
+
+
+# Inner lip contour (traces the mouth opening itself)
+UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308]
+LOWER_LIP_INNER = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308]
+
+
+# Quad formed by two upper-inner and two lower-inner lip points,
+# used to track how the mouth opening's cross-section changes shape.
+QUAD_LOOP = [87, 82, 312, 317]  # order matters: this is the loop 87->82->312->317->87
+
+
+
+
+
+def compute_corner_lift_angles(landmarks, w, h):
+    """Angle (degrees) of each mouth corner relative to a horizontal line
+    drawn through the mouth's vertical center (midpoint of inner lip
+    top/bottom, 13 & 14).
+
+    ~0 deg  -> corner level with center (yawn-like, jaw drops straight down)
+    positive -> corner lifted ABOVE center (smile-like, zygomaticus pulls up)
+    negative -> corner pulled BELOW center (frown-like)
+
+    Uses atan2 so the sign is meaningful and the angle is well-defined even
+    when the corner is nearly level (unlike acos-based angles, which get
+    numerically unstable near 0).
+    """
+    top = landmarks[13]
+    bottom = landmarks[14]
+    left = landmarks[61]
+    right = landmarks[291]
+
+    cx = (top.x + bottom.x) / 2.0 * w
+    cy = (top.y + bottom.y) / 2.0 * h
+
+    lx, ly = left.x * w, left.y * h
+    rx, ry = right.x * w, right.y * h
+
+    # Image y grows downward, so negate dy to make "up" positive, matching
+    # normal angle convention (lift = positive, droop = negative).
+    left_angle = math.degrees(math.atan2(-(ly - cy), cx - lx))    # note: left is to the LEFT of center, so dx = cx-lx (positive)
+    right_angle = math.degrees(math.atan2(-(ry - cy), rx - cx))   # right corner: dx = rx-cx (positive)
+
+    return left_angle, right_angle, (cx, cy)
+
+
+def draw_corner_lift_angles(frame, landmarks, w, h, color=(0, 200, 255),
+                             base_color=(255, 255, 255)):
+    left_angle, right_angle, (cx, cy) = compute_corner_lift_angles(landmarks, w, h)
+
+    cx_i, cy_i = int(cx), int(cy)
+    left_pt = (int(landmarks[61].x * w), int(landmarks[61].y * h))
+    right_pt = (int(landmarks[291].x * w), int(landmarks[291].y * h))
+
+    # Horizontal reference line through mouth center.
+    cv2.line(frame, (0, cy_i), (w, cy_i), base_color, 1)
+
+    # Center-to-corner lines.
+    cv2.line(frame, (cx_i, cy_i), left_pt, color, 1)
+    cv2.line(frame, (cx_i, cy_i), right_pt, color, 1)
+    cv2.circle(frame, (cx_i, cy_i), 3, color, -1)
+
+    cv2.putText(frame, f"{left_angle:+.0f}", (left_pt[0] - 20, left_pt[1] - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    cv2.putText(frame, f"{right_angle:+.0f}", (right_pt[0] + 4, right_pt[1] - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+    return left_angle, right_angle
+
 
 
 class MonotonicTimestamp:
@@ -68,6 +141,25 @@ class MonotonicTimestamp:
         self._last_ms = ms
         return ms
 
+
+
+def draw_landmark_indices(frame, landmarks, indices, w, h, color=(0, 255, 0)):
+    """Draws a small dot + the numeric index at each given landmark point.
+    Useful for visually mapping index numbers to physical points on the lips."""
+    for idx in indices:
+        pt = landmarks[idx]
+        px, py = int(pt.x * w), int(pt.y * h)
+        cv2.circle(frame, (px, py), 2, color, -1)
+        cv2.putText(frame, str(idx), (px + 3, py - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
+def draw_all_inner_lip_points(frame, landmarks, w, h):
+    for idx in UPPER_LIP_INNER:
+        pt = landmarks[idx]
+        cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (255, 0, 0), -1)  # blue = upper
+    for idx in LOWER_LIP_INNER:
+        pt = landmarks[idx]
+        cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (0, 255, 255), -1)  # yellow = lower
 
 def build_face_landmarker(model_path: str):
     base_options = mp_python.BaseOptions(model_asset_path=model_path)
@@ -98,6 +190,7 @@ def compute_mar(landmarks, w, h) -> float:
 
     vertical = (((top.x - bottom.x) * w) ** 2 + ((top.y - bottom.y) * h) ** 2) ** 0.5
     horizontal = (((left.x - right.x) * w) ** 2 + ((left.y - right.y) * h) ** 2) ** 0.5
+    # print(f"MAR: vertical={vertical:.2f}, horizontal={horizontal:.2f}, ratio={vertical/horizontal:.2f}")
 
     if horizontal == 0:
         return 0.0
@@ -133,7 +226,7 @@ def draw_mouth_landmarks(frame, landmarks, w, h, mar_value, threshold):
 
 
 def draw_hud(frame, mar_value, threshold, fps, w, yawn_count, yawn_confirmed,
-             held_sec, yawn_hold, symmetry=None, is_oscillating=False):
+             held_sec, yawn_hold, lift_angle=None, is_oscillating=False):
     is_open = mar_value > threshold
     status_color = (0, 0, 255) if is_open else (0, 255, 0)
     status_text = "MOUTH OPEN" if is_open else "MOUTH CLOSED"
@@ -146,10 +239,9 @@ def draw_hud(frame, mar_value, threshold, fps, w, yawn_count, yawn_confirmed,
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
     next_y = 105
-    if symmetry is not None:
-        shape_hint = "smile-like (corners lifted)" if symmetry < -0.15 else \
-                     "yawn-like (centered)" if abs(symmetry) <= 0.25 else "corners dropped"
-        cv2.putText(frame, f"Corner symmetry: {symmetry:+.2f} ({shape_hint})",
+    if lift_angle is not None:
+        shape_hint = "smile-like" if lift_angle > 8.0 else "yawn-like"
+        cv2.putText(frame, f"Corner lift: {lift_angle:+.1f} deg ({shape_hint})",
                     (10, next_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
         next_y += 25
 
@@ -229,7 +321,7 @@ def _open_camera():
     if rtsp_url:
         cap = cv2.VideoCapture(rtsp_url)
     else:
-        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        cap = cv2.VideoCapture(4, cv2.CAP_V4L2)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
@@ -243,7 +335,7 @@ def main():
     parser.add_argument("--model", type=str,
                          default="../models/face_landmarker.task",
                          help="Path to MediaPipe face_landmarker .task model")
-    parser.add_argument("--threshold", type=float, default=.35,
+    parser.add_argument("--threshold", type=float, default=0.35,
                          help="MAR above this counts as mouth-open (default 0.6; "
                               "tune against your own footage with --debug)")
     parser.add_argument("--yawn-hold", type=float, default=0.5,
@@ -261,13 +353,18 @@ def main():
                               "(rejects smiles/laughs, where corners lift toward "
                               "the top lip). Experimental -- tune "
                               "SYMMETRY_MAX_OFFSET against your own footage first.")
-    parser.add_argument("--oscillation-window", type=int, default=30,
-                         help="Frames of mouth-open/closed history to scan for "
-                              "rapid open/close cycling, i.e. talking (default 30)")
+    parser.add_argument("--oscillation-window-sec", type=float, default=3.0,
+                     help="Seconds of mouth-open/closed history to scan for "
+                          "rapid open/close cycling, i.e. talking (default 3.0s)")
     parser.add_argument("--max-transitions", type=int, default=2,
                          help="If more than this many mouth-open rising edges occur "
                               "within --oscillation-window frames, treat it as "
                               "talking/oscillating and reject the yawn (default 3)")
+    
+    parser.add_argument("--corner-lift-max", type=float, default=8.0,
+                     help="Max avg corner-lift angle (degrees) allowed for a "
+                          "yawn; above this the mouth shape looks smile-like "
+                          "and is rejected (default 8.0, tune with --debug)")
     args = parser.parse_args()
 
     display = LazyDisplay(config.DISPLAY_W, config.DISPLAY_H, config.CAM_FPS)
@@ -302,15 +399,19 @@ def main():
 
     last_debug_print = 0.0
     smoothed_mar = None
+    smoothed_mar = None
+    smoothed_lift_angle = None
     SMOOTHING_ALPHA = 0.4  # lower = smoother/slower to react, higher = snappier/noisier
 
     mouth_open_start = None  # wall-clock time MAR first crossed `threshold`
     yawn_count = 0
     last_yawn_confirmed = False
+    mar_during_hold = []  # reset to [] whenever mouth_open_start is reset to None
 
-    # Trailing "mouth open" history, used to tell one sustained yawn apart
-    # from the repeated open/close of talking, laughing, or singing.
-    mouth_open_history = deque(maxlen=args.oscillation_window)
+    YAWN_COOLDOWN_SEC = 4.0
+    last_yawn_time = -999.0
+    
+    mouth_open_history = deque()
 
     try:
         while True:
@@ -344,21 +445,28 @@ def main():
                 smoothed_mar = mar_value if smoothed_mar is None else (
                     SMOOTHING_ALPHA * mar_value + (1 - SMOOTHING_ALPHA) * smoothed_mar
                 )
-                draw_mouth_landmarks(frame, landmarks, w, h, smoothed_mar, threshold)
+               
+                
+                left_angle, right_angle = draw_corner_lift_angles(frame, landmarks, w, h)
+                avg_lift_angle = (left_angle + right_angle) / 2.0
 
-                # -- Duration-based yawn confirmation --
-                # A brief mouth-open (a word, a laugh, a quick tongue-out)
-                # won't sustain past `--yawn-hold` seconds; a real yawn does.
+                smoothed_lift_angle = avg_lift_angle if smoothed_lift_angle is None else (
+                    SMOOTHING_ALPHA * avg_lift_angle + (1 - SMOOTHING_ALPHA) * smoothed_lift_angle
+                )
+
+                if args.debug and (now - last_debug_print > 1.0):
+                    print(f"[DEBUG] Corner lift angle -> raw_avg:{avg_lift_angle:+.1f}  smoothed:{smoothed_lift_angle:+.1f}")
+               
                 is_open_now = smoothed_mar > threshold
+                is_open_raw = mar_value > threshold
+                mouth_open_history.append((now, is_open_raw))
 
-                # Oscillation check: count mouth-open rising edges in the
-                # trailing window to catch talking/laughing/singing, where
-                # the mouth opens and closes repeatedly rather than staying
-                # open in one sustained event.
-                mouth_open_history.append(is_open_now)
+                mouth_open_history.append((now, is_open_raw))
+                while mouth_open_history and now - mouth_open_history[0][0] > args.oscillation_window_sec:
+                    mouth_open_history.popleft()
                 rising_edges = sum(
                     1 for i in range(1, len(mouth_open_history))
-                    if mouth_open_history[i] and not mouth_open_history[i - 1]
+                    if mouth_open_history[i][1] and not mouth_open_history[i-1][1]
                 )
                 is_oscillating = rising_edges > args.max_transitions
 
@@ -367,19 +475,28 @@ def main():
                           f"rising_edges={rising_edges}/{args.max_transitions}  "
                           f"oscillating={is_oscillating}")
                     last_debug_print = now
+                    
+                
+
 
                 if is_open_now:
                     if mouth_open_start is None:
                         mouth_open_start = now
+                        mar_during_hold = []       # reset only when a NEW hold period starts
                     held_sec = now - mouth_open_start
                     duration_ok = held_sec >= args.yawn_hold
                     # A smile/laugh lifts the corners toward (or above) the
                     # top lip, pushing symmetry sharply negative -- reject
                     # those even if duration alone would pass.
                     symmetry_ok = (not args.require_symmetric) or (
-                        symmetry > -SYMMETRY_MAX_OFFSET
+                        smoothed_lift_angle < args.corner_lift_max
                     )
-                    yawn_confirmed = duration_ok and symmetry_ok and not is_oscillating
+                    # inside is_open_now block:
+                    mar_during_hold.append(mar_value)
+                    mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < 0.5  # tune this
+
+                                        
+                    yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
                     if is_oscillating:
                         # Talking-like cycling detected -- restart the hold
                         # timer so a lucky long "open" phase right after a
@@ -387,29 +504,32 @@ def main():
                         mouth_open_start = now
                 else:
                     mouth_open_start = None
+                    mar_during_hold = []   
             else:
                 cv2.putText(frame, "NO FACE DETECTED", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 smoothed_mar = None
+                smoothed_lift_angle = None
                 mouth_open_start = None
+                mar_during_hold = []           # add this too
                 mouth_open_history.clear()
 
             # Count on rising edge only (don't recount every frame the
             # hold condition stays true).
             if yawn_confirmed and not last_yawn_confirmed:
-                yawn_count += 1
-                extra = ""
-                if args.require_symmetric:
-                    extra += ", symmetry-checked"
-                extra += ", oscillation-checked"
-                print(f"[YAWN #{yawn_count}] confirmed (held {args.yawn_hold:.1f}s+{extra})")
+                if now - last_yawn_time >= YAWN_COOLDOWN_SEC:
+                    yawn_count += 1
+                    last_yawn_time = now
+                    print(f"[YAWN #{yawn_count}] confirmed ...")
+                else:
+                    print(f"[INFO] Yawn-like event ignored (within {YAWN_COOLDOWN_SEC:.0f}s cooldown of last yawn)")
             last_yawn_confirmed = yawn_confirmed
 
             fps = 1.0 / (time.perf_counter() - frame_start + 1e-6)
             hud_mar = smoothed_mar if smoothed_mar is not None else mar_value
             draw_hud(frame, hud_mar, threshold, fps, w, yawn_count, yawn_confirmed,
-                      held_sec, args.yawn_hold, symmetry=symmetry,
-                      is_oscillating=is_oscillating)
+                held_sec, args.yawn_hold, lift_angle=smoothed_lift_angle,
+                is_oscillating=is_oscillating)
 
             # LazyDisplay's ffplay subprocess was started with a fixed
             # -video_size (DISPLAY_W x DISPLAY_H). Every frame piped to it
