@@ -152,7 +152,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 2   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
@@ -202,3 +202,12 @@ LOG_DIR = os.path.join(
 
 FRAME_LOG_FLUSH_EVERY_N = 30   # flush/fsync every N rows instead of every row (SD-card wear)
 LOG_RETENTION_DAYS = 14        # delete log files older than this at startup
+
+
+# ─────────────────────────────────────────────
+# Blink visibility detection (IR-blocking sunglasses, etc.)
+# ─────────────────────────────────────────────
+NO_BLINK_TIMEOUT_SEC = 10.0  
+MAX_BLINK_FRAMES = 15  
+OCCLUSION_ALERT_REPEAT_SEC = 30.0
+OCCLUSION_HEAD_DROP_HOLD_FRAMES = 2

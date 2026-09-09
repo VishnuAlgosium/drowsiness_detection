@@ -18,7 +18,7 @@ OPENCV_USE_OPENCL = False
 
 
 def apply_cpu_settings() -> None:
-    """Apply the CPU/threading env vars. Call this before importing cv2/mediapipe/ultralytics."""
+    """Apply CPU/threading env vars. Call before importing cv2/mediapipe/ultralytics."""
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
@@ -33,80 +33,81 @@ EAR_THRESHOLD = 0.25
 CONSEC_FRAMES = 20
 ALERT_COOLDOWN_SEC = 4.0
 
-# Startup calibration: baseline_ear * EAR_THRESHOLD_RATIO replaces the fixed
-# threshold above, so eye shape doesn't need one global cutoff. 0 = skip.
+# Startup calibration replaces EAR_THRESHOLD with baseline_ear * EAR_THRESHOLD_RATIO,
+# since eye shape varies per person. 0 = skip calibration.
 EAR_CALIBRATION_FRAMES = 60
 EAR_THRESHOLD_RATIO = 0.75
 
-# EMA smoothing factor for EAR (lower = smoother, damps rubbing/occlusion noise).
-EAR_SMOOTHING_ALPHA = 0.4
+EAR_SMOOTHING_ALPHA = 0.4   # EMA factor; lower = smoother, damps blink/occlusion noise
+EAR_ASYMMETRY_MAX = 0.12   # max |left-right| EAR diff to count as "both closed" (rejects winks)
 
-# Max |left_ear - right_ear| to still count as "both eyes closed" (rejects winks).
-EAR_ASYMMETRY_MAX = 0.12
-
-# Consecutive no-face frames tolerated before counters start decaying.
-NO_FACE_GRACE_FRAMES = 5
+NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start decaying
 
 # ─────────────────────────────────────────────
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.6          # mouth-open ratio above which counts as "open"
-YAWN_CONSEC_FRAMES = 20      # ~0.6-0.7s at 30fps held open before it's a yawn
-YAWN_COOLDOWN_SEC = 4.0
+MAR_THRESHOLD = 0.3          # mouth-open ratio above which counts as "open"
+MAR_SMOOTHING_ALPHA = 0.4    # EMA factor; damps landmark jitter around the threshold
+YAWN_HOLD_SEC = 1.0          # seconds mouth must stay open continuously to count as a yawn
+YAWN_COOLDOWN_SEC = 0.5
 
-# Looser threshold for small/suppressed yawns, held longer to compensate.
-MAR_LOW_THRESHOLD = 0.45
-MAR_LOW_CONSEC_FRAMES = 35
-
-# Oscillation filter: a yawn is one open->hold->close; talking/laughing/
-# singing repeatedly opens and closes. Reject if rising edges exceed this
-# within the trailing window.
+# Oscillation filter: a yawn is one open->hold->close; talking/laughing/singing
+# opens and closes repeatedly. Reject if rising edges exceed this in the window.
 YAWN_TRANSITION_WINDOW = 30
 YAWN_MAX_TRANSITIONS = 1
 
-# MediaPipe face mesh mouth landmark indices:
-# top inner lip, bottom inner lip, left corner, right corner
+# Optional smile/laugh rejection, off by default -- experimental, validate
+# against real footage before enabling.
+YAWN_REQUIRE_SYMMETRIC = True
+YAWN_SYMMETRY_MAX_OFFSET = 0.25
+
+# MediaPipe mouth landmarks: top inner lip, bottom inner lip, left corner, right corner
 MOUTH_TOP = 13
 MOUTH_BOTTOM = 14
 MOUTH_LEFT = 78
 MOUTH_RIGHT = 308
 
+# Outer corners, used only for the symmetry check above.
+MOUTH_OUTER_LEFT = 61
+MOUTH_OUTER_RIGHT = 291
+
 # ─────────────────────────────────────────────
-# Distraction detection (head yaw + low-confidence phone)
+# Distraction detection (head pose + low-confidence phone)
 # ─────────────────────────────────────────────
 
 NOSE_TIP_IDX = 1
 
 # Tolerance around the calibrated baseline (see _calibrate_baseline in
-# detector.py) -- "forward" isn't 0 degrees unless the camera sits dead
-# center in front of the driver's face. An off-center mount (e.g. A-pillar)
-# means the baseline itself will be offset, and these are the allowed
-# deviation from it before counting as looking away.
+# detector.py), since an off-center mount means "forward" isn't 0 degrees.
 YAW_ANGLE_MAX = 20.0
 PITCH_ANGLE_MAX = 20.0
 ROLL_ANGLE_MAX = 25.0
 
-DISTRACTION_CONSEC_FRAMES = 45   # ~1.5s at 30fps held before flagging
+
+
+DISTRACTION_HOLD_SEC = 0.5   # look-away hold time in real seconds (fps-independent)
 DISTRACTION_COOLDOWN_SEC = 4.0
 
 # ─────────────────────────────────────────────
-# Head drop detection (sudden downward head pitch, e.g. nodding off)
+# Head drop detection (sudden downward pitch, e.g. nodding off)
 # ─────────────────────────────────────────────
 
 FOREHEAD_IDX = 10
 CHIN_IDX = 152
 
-# A real head drop happens quickly; slowly leaning down to check a phone
-# should not count. Window over which the "how fast" check is measured.
-HEAD_DROP_WINDOW_SEC = 1.0
-HEAD_DROP_DELTA = 0.12          # min pitch-ratio rise within the window to count as "sudden"
+# A real head drop is fast; slowly leaning down to check a phone shouldn't
+# count. Window over which the "how fast" rise is measured.
+HEAD_DROP_WINDOW_SEC = 0.5
+HEAD_DROP_DELTA = 0.12   # min pitch-ratio rise within the window to count as "sudden"
 
-# Absolute "head is down" threshold, and how long it must stay past that
-# threshold to count as a real drop rather than a quick self-correcting nod.
+HEAD_DROP_SMOOTHING_ALPHA = 0.8   # EMA factor; damps landmark jitter
+
+# "Head is down" threshold, and how long it must hold to count as a real
+# drop rather than a quick glance or self-correcting nod.
 PITCH_RATIO_DOWN = 0.62
-HEAD_DROP_HOLD_FRAMES = 10
-HEAD_DROP_COOLDOWN_SEC = 4.0
+HEAD_DROP_HOLD_FRAMES = 4
+HEAD_DROP_COOLDOWN_SEC = 1.0
 
 # ─────────────────────────────────────────────
 # Phone-use detection (YOLO ONNX)
@@ -115,7 +116,7 @@ HEAD_DROP_COOLDOWN_SEC = 4.0
 PHONE_DETECTION_ENABLED = True
 
 # Ultralytics loads an NCNN export by pointing at the exported model folder
-# (the one containing model.ncnn.param / model.ncnn.bin), not a single file.
+# (containing model.ncnn.param / model.ncnn.bin), not a single file.
 PHONE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "models",
@@ -123,19 +124,17 @@ PHONE_MODEL_PATH = os.path.join(
 )
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
-PHONE_CONF_THRESHOLD = 0.5
+PHONE_CONF_THRESHOLD = 0.7
 PHONE_CONFIRM_FRAMES = 3
 PHONE_CONFIRM_WINDOW = 5
 PHONE_COOLDOWN_SEC = 5.0
 
-# YOLO on CPU is heavy; run it every Nth frame to keep the capture/display
-# loop from lagging. A held-up phone stays in view long enough to still
-# fill the confirmation buffer.
+# YOLO on CPU is heavy; run every Nth frame to keep capture/display from lagging.
 PHONE_DETECT_EVERY_N_FRAMES = 3
 
-# Low-confidence tier for occluded/edge-on/calling-position views, needs a
-# longer sustained window since a single low-confidence frame is unreliable.
-PHONE_LOW_CONF_THRESHOLD = 0.30
+# Low-confidence tier for occluded/edge-on/calling-position views; needs a
+# longer sustained window since one low-confidence frame is unreliable.
+PHONE_LOW_CONF_THRESHOLD = 1.0
 PHONE_LOW_CONF_WINDOW = 10
 PHONE_LOW_CONF_FRAMES = 7
 
@@ -143,9 +142,7 @@ PHONE_LOW_CONF_FRAMES = 7
 # Display defaults
 # ─────────────────────────────────────────────
 
-# Off by default: most edge deployments (headless Pi) have no attached
-# display, and ffplay may not even be installed. Enable with 'v' at runtime.
-DISPLAY_ON_START = True
+DISPLAY_ON_START = True   # off by default on headless edge devices; toggle with 'v'
 
 # ─────────────────────────────────────────────
 # Camera
@@ -155,15 +152,12 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-# Device index for cv2.VideoCapture when RTSP_URL is unset. On a Pi with a
-# single USB/CSI camera this is almost always 0.
-CAMERA_INDEX = 2
+CAMERA_INDEX = 2   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
 
-# Hard cap so a missing/dark camera can't hang startup forever.
-EAR_CALIBRATION_TIMEOUT_SEC = 15.0
+EAR_CALIBRATION_TIMEOUT_SEC = 15.0   # hard cap so a missing/dark camera can't hang startup
 
 # ─────────────────────────────────────────────
 # ffplay output window
@@ -206,10 +200,5 @@ LOG_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
 )
 
-# Flush/fsync the per-frame CSV every N rows instead of every row, since
-# writing at 30fps to an SD card wears it out fast.
-FRAME_LOG_FLUSH_EVERY_N = 30
-
-# Old log files older than this are deleted at startup -- SD-card storage
-# on edge devices is limited and this runs unattended for long stretches.
-LOG_RETENTION_DAYS = 14
+FRAME_LOG_FLUSH_EVERY_N = 30   # flush/fsync every N rows instead of every row (SD-card wear)
+LOG_RETENTION_DAYS = 14        # delete log files older than this at startup
