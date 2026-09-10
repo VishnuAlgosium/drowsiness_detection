@@ -27,6 +27,7 @@ from .blink_visibility import BlinkVisibilityMonitor
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
+import math
 
 
 _shutdown_requested = False
@@ -184,6 +185,41 @@ def _calibrate_baseline(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
     return ear_threshold, baseline_yaw, baseline_pitch, baseline_roll
 
 
+
+
+
+
+def compute_corner_lift_angles(landmarks, w, h):
+    """Angle (degrees) of each mouth corner relative to a horizontal line
+    drawn through the mouth's vertical center (midpoint of inner lip
+    top/bottom, 13 & 14).
+
+    ~0 deg  -> corner level with center (yawn-like, jaw drops straight down)
+    positive -> corner lifted ABOVE center (smile-like, zygomaticus pulls up)
+    negative -> corner pulled BELOW center (frown-like)
+
+    Uses atan2 so the sign is meaningful and the angle is well-defined even
+    when the corner is nearly level (unlike acos-based angles, which get
+    numerically unstable near 0).
+    """
+    top = landmarks[13]
+    bottom = landmarks[14]
+    left = landmarks[61]
+    right = landmarks[291]
+
+    cx = (top.x + bottom.x) / 2.0 * w
+    cy = (top.y + bottom.y) / 2.0 * h
+
+    lx, ly = left.x * w, left.y * h
+    rx, ry = right.x * w, right.y * h
+
+    # Image y grows downward, so negate dy to make "up" positive, matching
+    # normal angle convention (lift = positive, droop = negative).
+    left_angle = math.degrees(math.atan2(-(ly - cy), cx - lx))    # note: left is to the LEFT of center, so dx = cx-lx (positive)
+    right_angle = math.degrees(math.atan2(-(ry - cy), rx - cx))   # right corner: dx = rx-cx (positive)
+
+    return left_angle, right_angle
+
 def run() -> None:
     config.apply_cpu_settings()
 
@@ -240,7 +276,7 @@ def run() -> None:
     yawn_count = 0
     last_yawn_alert = 0.0
     last_yawn_confirmed = False   # previous frame's yawn_confirmed, to count on rising edge only
-    mouth_open_history = deque(maxlen=config.YAWN_TRANSITION_WINDOW)
+    mouth_open_history = deque()
 
     gaze_away_start = None
     gaze_away_elapsed = 0.0
@@ -256,6 +292,13 @@ def run() -> None:
     current_pitch_ratio = 0.5
     smoothed_pitch_ratio = None
     pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
+    
+    last_yawn_time = -999.0
+    smoothed_lift_angle = None
+    yawn_confirmed = False
+    
+    
+    held_sec = 0.0
 
     frame_num = 0
 
@@ -324,10 +367,23 @@ def run() -> None:
                     config.MAR_SMOOTHING_ALPHA * current_mar
                     + (1 - config.MAR_SMOOTHING_ALPHA) * smoothed_mar
                 )
-                current_symmetry = mouth_corner_symmetry(
-                    landmarks, config.MOUTH_TOP, config.MOUTH_BOTTOM,
-                    config.MOUTH_OUTER_LEFT, config.MOUTH_OUTER_RIGHT, w, h,
+                
+                
+                # current_symmetry = mouth_corner_symmetry(
+                #     landmarks, config.MOUTH_TOP, config.MOUTH_BOTTOM,
+                #     config.MOUTH_OUTER_LEFT, config.MOUTH_OUTER_RIGHT, w, h,
+                # )
+                
+                left_angle, right_angle = compute_corner_lift_angles(landmarks, w, h)
+                
+                avg_lift_angle = (left_angle + right_angle) / 2.0
+
+                smoothed_lift_angle = avg_lift_angle if smoothed_lift_angle is None else (
+                    config.MAR_SMOOTHING_ALPHA * avg_lift_angle + (1 - config.MAR_SMOOTHING_ALPHA) * smoothed_lift_angle
                 )
+                
+                
+                
                 if face_results.facial_transformation_matrixes:
                     pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
                     if pose_angles:
@@ -373,25 +429,60 @@ def run() -> None:
 
                 # Count mouth-open rising edges in the trailing window to catch talking/laughing/singing.
                 mouth_open = smoothed_mar > config.MAR_THRESHOLD
-                mouth_open_history.append(mouth_open)
+                is_open_raw = current_mar > config.MAR_THRESHOLD
+                
+                mouth_open_history.append((now, is_open_raw))
+                
+                
+                while mouth_open_history and now - mouth_open_history[0][0] > config.OSCILLATION_WINDOW_SEC:
+                    mouth_open_history.popleft()
+            
                 rising_edges = sum(
                     1 for i in range(1, len(mouth_open_history))
-                    if mouth_open_history[i] and not mouth_open_history[i - 1]
+                    if mouth_open_history[i][1] and not mouth_open_history[i-1][1]
                 )
+                
+                
+                
                 is_oscillating = rising_edges > config.YAWN_MAX_TRANSITIONS
+                
+
+
 
                 # A yawn is one continuous mouth-open stretch; oscillation restarts the hold.
-                if mouth_open and not is_oscillating:
+       
+                if mouth_open :
                     if mouth_open_start is None:
                         mouth_open_start = now
+                        mar_during_hold = []  
+                    held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
+                    duration_ok =held_sec >= config.YAWN_HOLD_SEC
+                    
+                    symmetry_ok = (not config.YAWN_REQUIRE_SYMMETRIC ) or ( smoothed_lift_angle < config.CORNER_LIFT_MAX) 
+                    mar_during_hold.append(current_mar)
+                    mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < 0.5  # tune this
+                    
+                    
+                    
+                    yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
+                    print(f"[DEBUG] Yawn check: held_sec={held_sec:.2f}, duration_ok={duration_ok}, symmetry_ok={symmetry_ok}, mar_variance_ok={mar_variance_ok}, is_oscillating={is_oscillating}, yawn_confirmed={yawn_confirmed}")
+                    if is_oscillating:
+                        mouth_open_start = now  # reset hold timer if oscillation detected
+                        
                 else:
                     mouth_open_start = None
+                    mar_during_hold = []
+                
             else:
                 no_face_streak += 1
                 # Tolerate brief tracking loss before decaying counters.
                 if no_face_streak > config.NO_FACE_GRACE_FRAMES:
                     counter = max(0, counter - 1)
                     mouth_open_start = None
+                    smoothed_mar = None
+                    smoothed_lift_angle = None
+                    mar_during_hold = []
+                    mouth_open_history.clear()
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
                     pitch_history.clear()
@@ -420,20 +511,20 @@ def run() -> None:
                 log_alert("eyes_occluded", {"ear": round(current_ear, 3)})
                 last_occlusion_alert = now
 
-            # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
-            yawn_held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
-            symmetry_ok = (
-                not config.YAWN_REQUIRE_SYMMETRIC
-                or current_symmetry > -config.YAWN_SYMMETRY_MAX_OFFSET
-            )
-            yawn_confirmed = yawn_held_sec >= config.YAWN_HOLD_SEC and symmetry_ok
+            # # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
+            # yawn_held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
+            # symmetry_ok = (
+            #     not config.YAWN_REQUIRE_SYMMETRIC
+            #     or current_symmetry > -config.YAWN_SYMMETRY_MAX_OFFSET
+            # )
+            # yawn_confirmed = yawn_held_sec >= config.YAWN_HOLD_SEC and symmetry_ok
             # Count on rising edge only, so one long yawn doesn't retrigger every cooldown window.
-            if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_alert > config.YAWN_COOLDOWN_SEC:
+            if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_time > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
                 print(f"[YAWN #{yawn_count}] Yawn detected MAR={current_mar:.3f}")
                 play_yawn_alert()
                 log_alert("yawn_detected", {"mar": round(current_mar, 3)})
-                last_yawn_alert = now
+                last_yawn_time = now
             last_yawn_confirmed = yawn_confirmed
 
             # ── Distraction alert (sustained look-away) ──
@@ -497,7 +588,7 @@ def run() -> None:
 
                 occlusion_text = " [EYES OCCLUDED]" if eyes_occluded else ""
                 ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}{occlusion_text}"
-                mar_text = f"MAR: {current_mar:.3f}  Held:{yawn_held_sec:.1f}s/{config.YAWN_HOLD_SEC:.1f}s  Yawns:{yawn_count}"
+                mar_text = f"MAR: {current_mar:.3f} ({'YAWN' if is_yawning else 'OK'})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{head_drop_hold_frames})  HeadDrops:{head_drop_count}"
                 fps_text = f"FPS: {current_fps:.1f}"

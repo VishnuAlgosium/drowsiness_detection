@@ -286,32 +286,6 @@ def enhance_low_light(frame):
     return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
 
-def compute_corner_symmetry(landmarks, w, h) -> float:
-    """Measures where the mouth-corner line sits relative to the vertical
-    top/bottom lip gap: 0.0 = corners exactly centered between top and
-    bottom lip ('+' shape, typical of a yawn's jaw-drop), negative = corners
-    pulled up toward/above the top lip (typical of a smile/laugh, where the
-    zygomaticus muscle lifts the corners), positive = corners pulled down
-    toward the bottom lip.
-
-    Purely landmark-position based (no appearance/color), so unlike an
-    eye-squint blendshape this should also work on IR footage. This is an
-    experimental heuristic -- validate it against your own footage with
-    --debug before relying on it; corner lift during yawning/smiling
-    varies somewhat by person."""
-    top_y = landmarks[INNER_LIPS_TOP].y * h
-    bottom_y = landmarks[INNER_LIPS_BOTTOM].y * h
-    corner_y = ((landmarks[MOUTH_LEFT_CORNER].y + landmarks[MOUTH_RIGHT_CORNER].y)
-                / 2.0) * h
-
-    vertical_gap = bottom_y - top_y
-    if vertical_gap <= 0:
-        return 0.0
-
-    mid_y = (top_y + bottom_y) / 2.0
-    return (corner_y - mid_y) / vertical_gap
-
-
 def _open_camera():
     """Mirrors detector.py's camera-opening logic exactly, so this test
     script sees the same camera behavior (RTSP vs local, V4L2 backend,
@@ -430,7 +404,7 @@ def main():
             results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
             mar_value = 0.0
-            symmetry = 0.0
+            
             yawn_confirmed = False
             held_sec = 0.0
             is_oscillating = False
@@ -440,7 +414,7 @@ def main():
             if results.face_landmarks:
                 landmarks = results.face_landmarks[0]
                 mar_value = compute_mar(landmarks, w, h)
-                symmetry = compute_corner_symmetry(landmarks, w, h)
+               
 
                 smoothed_mar = mar_value if smoothed_mar is None else (
                     SMOOTHING_ALPHA * mar_value + (1 - SMOOTHING_ALPHA) * smoothed_mar
@@ -461,7 +435,7 @@ def main():
                 is_open_raw = mar_value > threshold
                 mouth_open_history.append((now, is_open_raw))
 
-                mouth_open_history.append((now, is_open_raw))
+                # mouth_open_history.append((now, is_open_raw))
                 while mouth_open_history and now - mouth_open_history[0][0] > args.oscillation_window_sec:
                     mouth_open_history.popleft()
                 rising_edges = sum(
@@ -471,7 +445,7 @@ def main():
                 is_oscillating = rising_edges > args.max_transitions
 
                 if args.debug and (now - last_debug_print > 1.0):
-                    print(f"[DEBUG] MAR={mar_value:.3f}  corner_symmetry={symmetry:+.3f}  "
+                    print(f"[DEBUG] MAR={mar_value:.3f}  "
                           f"rising_edges={rising_edges}/{args.max_transitions}  "
                           f"oscillating={is_oscillating}")
                     last_debug_print = now

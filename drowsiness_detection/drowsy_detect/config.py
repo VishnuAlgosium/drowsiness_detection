@@ -47,15 +47,18 @@ NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start deca
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.3          # mouth-open ratio above which counts as "open"
+MAR_THRESHOLD = 0.35          # mouth-open ratio above which counts as "open"
 MAR_SMOOTHING_ALPHA = 0.4    # EMA factor; damps landmark jitter around the threshold
-YAWN_HOLD_SEC = 1.0          # seconds mouth must stay open continuously to count as a yawn
-YAWN_COOLDOWN_SEC = 0.5
+YAWN_HOLD_SEC = 0.5          # seconds mouth must stay open continuously to count as a yawn
+YAWN_COOLDOWN_SEC = 4.0
 
 # Oscillation filter: a yawn is one open->hold->close; talking/laughing/singing
 # opens and closes repeatedly. Reject if rising edges exceed this in the window.
 YAWN_TRANSITION_WINDOW = 30
-YAWN_MAX_TRANSITIONS = 1
+YAWN_MAX_TRANSITIONS = 2
+
+CORNER_LIFT_MAX = 8.0   # max corner-lift ratio to count as a yawn (rejects smiles)
+OSCILLATION_WINDOW_SEC = 3.0   # seconds over which to count rising edges for oscillation
 
 # Optional smile/laugh rejection, off by default -- experimental, validate
 # against real footage before enabling.
@@ -152,7 +155,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 2   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 4   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
