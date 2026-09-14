@@ -9,6 +9,7 @@ alert can be identified by ear alone:
     distraction -> double, mid-pitched
     head drop   -> fast three-tone descending sweep
     occlusion   -> two-tone, mid-pitched, ascending (eyes hidden from camera)
+    perclos     -> slow triple tone, single pitch (gradual fatigue building)
 """
 
 import numpy as np
@@ -100,6 +101,15 @@ def play_occlusion_alert() -> None:
     b1 = _beep(500, 0.25, vol=0.5)
     b2 = _beep(700, 0.25, vol=0.5)
     seq = np.concatenate([b1, silence, b2])
+    _play_sequence(seq)
+
+
+def play_perclos_alert() -> None:
+    """Slow triple tone at a single pitch, used for elevated rolling PERCLOS
+    (fatigue building gradually over the window, not a sudden event)."""
+    silence = np.zeros(int(44100 * 0.15), dtype=np.int16)
+    beep = _beep(600, 0.2, vol=0.5)
+    seq = np.concatenate([beep, silence, beep, silence, beep])
     _play_sequence(seq)
 
 

@@ -4,9 +4,9 @@ alerts.py
 Shared logging for all three detectors (phone, drowsiness, yawn):
 
 - log_alert(): one JSONL line per alert, for an audit trail of events.
-- FrameLogger: one CSV row per frame with all three signals, so QA can
-  tune thresholds after the fact by looking at raw EAR/MAR/phone-confidence
-  values instead of just the alert moments.
+- FrameLogger: one CSV row per frame with all detector signals, so QA can
+  tune thresholds after the fact by looking at raw EAR/MAR/phone-confidence/
+  PERCLOS/gaze/pitch values instead of just the alert moments.
 """
 
 import csv
@@ -71,17 +71,25 @@ class FrameLogger:
         self._file = open(self.path, "w", newline="")
         self._writer = csv.writer(self._file)
         self._writer.writerow(
-            ["timestamp", "frame_num", "ear", "mar", "phone_confidence", "fps"]
+            ["timestamp", "frame_num", "ear", "mar", "phone_confidence",
+             "perclos", "yaw_deg", "pitch_deg", "roll_deg", "pitch_ratio", "fps"]
         )
         self._rows_since_flush = 0
 
-    def write(self, frame_num: int, ear: float, mar: float, phone_confidence: float, fps: float) -> None:
+    def write(self, frame_num: int, ear: float, mar: float, phone_confidence: float,
+              perclos: float, yaw_deg: float, pitch_deg: float, roll_deg: float,
+              pitch_ratio: float, fps: float) -> None:
         self._writer.writerow([
             datetime.now().isoformat(),
             frame_num,
             f"{ear:.3f}",
             f"{mar:.3f}",
             f"{phone_confidence:.3f}",
+            f"{perclos:.3f}",
+            f"{yaw_deg:.1f}",
+            f"{pitch_deg:.1f}",
+            f"{roll_deg:.1f}",
+            f"{pitch_ratio:.3f}",
             f"{fps:.1f}",
         ])
 

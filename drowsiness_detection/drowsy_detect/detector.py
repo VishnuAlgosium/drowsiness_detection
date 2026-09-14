@@ -18,12 +18,13 @@ from . import config
 from .alerts import log_alert, FrameLogger, cleanup_old_logs
 from .audio import (
     play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
-    play_head_drop_alert, play_occlusion_alert, shutdown_audio,
+    play_head_drop_alert, play_occlusion_alert, play_perclos_alert, shutdown_audio,
 )
-from .ear import eye_aspect_ratio
-from .mar import mouth_aspect_ratio, mouth_corner_symmetry
+from .ear import eye_aspect_ratio, average_ear
+from .mar import mouth_aspect_ratio
 from .gaze import head_pose_angles, head_pitch_ratio
 from .blink_visibility import BlinkVisibilityMonitor
+from .perclos import PerclosMonitor
 from .phone import PhoneDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
@@ -127,9 +128,7 @@ def _read_calibration_sample(cap, face_mesh, mp, timestamps: MonotonicTimestamp)
         return None
 
     landmarks = face_results.face_landmarks[0]
-    left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
-    right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
-    ear = (left_ear + right_ear) / 2.0
+    ear = average_ear(landmarks, config.LEFT_EYE_IDX, config.RIGHT_EYE_IDX, w, h)
 
     yaw, pitch, roll = 0.0, 0.0, 0.0
     if face_results.facial_transformation_matrixes:
@@ -202,10 +201,10 @@ def compute_corner_lift_angles(landmarks, w, h):
     when the corner is nearly level (unlike acos-based angles, which get
     numerically unstable near 0).
     """
-    top = landmarks[13]
-    bottom = landmarks[14]
-    left = landmarks[61]
-    right = landmarks[291]
+    top = landmarks[config.MOUTH_TOP]
+    bottom = landmarks[config.MOUTH_BOTTOM]
+    left = landmarks[config.MOUTH_OUTER_LEFT]
+    right = landmarks[config.MOUTH_OUTER_RIGHT]
 
     cx = (top.x + bottom.x) / 2.0 * w
     cy = (top.y + bottom.y) / 2.0 * h
@@ -271,6 +270,11 @@ def run() -> None:
         config.NO_BLINK_TIMEOUT_SEC, ear_threshold, config.MAX_BLINK_FRAMES
     )
 
+    perclos_monitor = PerclosMonitor(config.PERCLOS_WINDOW_SEC)
+    current_perclos = 0.0
+    perclos_alert_count = 0
+    last_perclos_alert = 0.0
+
     smoothed_mar = None
     mouth_open_start = None   # wall-clock time MAR first crossed MAR_THRESHOLD, or None
     yawn_count = 0
@@ -291,6 +295,7 @@ def run() -> None:
     last_head_drop_alert = 0.0
     current_pitch_ratio = 0.5
     smoothed_pitch_ratio = None
+    is_head_down = False
     pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
     
     last_yawn_time = -999.0
@@ -346,7 +351,6 @@ def run() -> None:
 
             current_ear = 0.0
             current_mar = 0.0
-            current_symmetry = 0.0
 
             if face_results.face_landmarks:
                 landmarks = face_results.face_landmarks[0]
@@ -367,23 +371,13 @@ def run() -> None:
                     config.MAR_SMOOTHING_ALPHA * current_mar
                     + (1 - config.MAR_SMOOTHING_ALPHA) * smoothed_mar
                 )
-                
-                
-                # current_symmetry = mouth_corner_symmetry(
-                #     landmarks, config.MOUTH_TOP, config.MOUTH_BOTTOM,
-                #     config.MOUTH_OUTER_LEFT, config.MOUTH_OUTER_RIGHT, w, h,
-                # )
-                
                 left_angle, right_angle = compute_corner_lift_angles(landmarks, w, h)
-                
                 avg_lift_angle = (left_angle + right_angle) / 2.0
 
                 smoothed_lift_angle = avg_lift_angle if smoothed_lift_angle is None else (
                     config.MAR_SMOOTHING_ALPHA * avg_lift_angle + (1 - config.MAR_SMOOTHING_ALPHA) * smoothed_lift_angle
                 )
-                
-                
-                
+
                 if face_results.facial_transformation_matrixes:
                     pose_angles = head_pose_angles(face_results.facial_transformation_matrixes[0])
                     if pose_angles:
@@ -427,6 +421,10 @@ def run() -> None:
                 eyes_closed = smoothed_ear < ear_threshold and eyes_agree
                 counter = counter + 1 if eyes_closed else max(0, counter - 1)
 
+                # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed --
+                # rises with frequent/long blinks, ahead of a single sustained closure.
+                current_perclos = perclos_monitor.update(now, eyes_closed)
+
                 # Count mouth-open rising edges in the trailing window to catch talking/laughing/singing.
                 mouth_open = smoothed_mar > config.MAR_THRESHOLD
                 is_open_raw = current_mar > config.MAR_THRESHOLD
@@ -451,27 +449,27 @@ def run() -> None:
 
                 # A yawn is one continuous mouth-open stretch; oscillation restarts the hold.
        
-                if mouth_open :
+                if mouth_open:
                     if mouth_open_start is None:
                         mouth_open_start = now
-                        mar_during_hold = []  
-                    held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
-                    duration_ok =held_sec >= config.YAWN_HOLD_SEC
-                    
-                    symmetry_ok = (not config.YAWN_REQUIRE_SYMMETRIC ) or ( smoothed_lift_angle < config.CORNER_LIFT_MAX) 
+                        mar_during_hold = []
+                    held_sec = now - mouth_open_start
+                    duration_ok = held_sec >= config.YAWN_HOLD_SEC
+
+                    symmetry_ok = (not config.YAWN_REQUIRE_SYMMETRIC) or (smoothed_lift_angle < config.CORNER_LIFT_MAX)
                     mar_during_hold.append(current_mar)
-                    mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < 0.5  # tune this
-                    
-                    
-                    
+                    mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < config.YAWN_MAX_MAR_VARIANCE
+
                     yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
-                    print(f"[DEBUG] Yawn check: held_sec={held_sec:.2f}, duration_ok={duration_ok}, symmetry_ok={symmetry_ok}, mar_variance_ok={mar_variance_ok}, is_oscillating={is_oscillating}, yawn_confirmed={yawn_confirmed}")
+
                     if is_oscillating:
-                        mouth_open_start = now  # reset hold timer if oscillation detected
-                        
+                        # Oscillation (talking/laughing) restarts the hold timer and its samples.
+                        mouth_open_start = now
+                        mar_during_hold = []
                 else:
                     mouth_open_start = None
                     mar_during_hold = []
+                    yawn_confirmed = False
                 
             else:
                 no_face_streak += 1
@@ -483,11 +481,15 @@ def run() -> None:
                     smoothed_lift_angle = None
                     mar_during_hold = []
                     mouth_open_history.clear()
+                    yawn_confirmed = False
+                    last_yawn_confirmed = False
                     gaze_away_start = None
                     head_drop_counter = max(0, head_drop_counter - 1)
                     pitch_history.clear()
                     blink_monitor.reset()
                     eyes_occluded = False
+                    perclos_monitor.reset()
+                    current_perclos = 0.0
 
             now = time.time()
 
@@ -511,13 +513,18 @@ def run() -> None:
                 log_alert("eyes_occluded", {"ear": round(current_ear, 3)})
                 last_occlusion_alert = now
 
-            # # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
-            # yawn_held_sec = (now - mouth_open_start) if mouth_open_start is not None else 0.0
-            # symmetry_ok = (
-            #     not config.YAWN_REQUIRE_SYMMETRIC
-            #     or current_symmetry > -config.YAWN_SYMMETRY_MAX_OFFSET
-            # )
-            # yawn_confirmed = yawn_held_sec >= config.YAWN_HOLD_SEC and symmetry_ok
+            # ── PERCLOS alert (rolling % eye closure) ──
+            # Catches fatigue building via frequent/long blinks, ahead of --
+            # and independent of -- the sustained-closure counter above.
+            if current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
+                perclos_alert_count += 1
+                print(f"[PERCLOS #{perclos_alert_count}] Rolling eye closure {current_perclos:.0%}")
+                play_perclos_alert()
+                log_alert("perclos_high", {"perclos": round(current_perclos, 3)})
+                last_perclos_alert = now
+
+            # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
+            # yawn_confirmed is computed above, in the per-frame face-detected block.
             # Count on rising edge only, so one long yawn doesn't retrigger every cooldown window.
             if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_time > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
@@ -571,7 +578,11 @@ def run() -> None:
 
             frame_elapsed = time.perf_counter() - frame_start
             current_fps = 1.0 / frame_elapsed if frame_elapsed > 0 else 0.0
-            frame_log.write(frame_num, current_ear, current_mar, phone_confidence, current_fps)
+            frame_log.write(
+                frame_num, current_ear, current_mar, phone_confidence, current_perclos,
+                current_yaw_deg, current_pitch_deg, current_roll_deg, current_pitch_ratio,
+                current_fps,
+            )
 
             # ── Display ──
             if display_on:
@@ -583,7 +594,7 @@ def run() -> None:
                 RED = (0, 0, 255)
 
                 is_distracted = gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC
-                is_head_down = smoothed_pitch_ratio is not None and smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
+                is_perclos_high = current_perclos >= config.PERCLOS_ALERT_THRESHOLD
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 occlusion_text = " [EYES OCCLUDED]" if eyes_occluded else ""
@@ -591,18 +602,20 @@ def run() -> None:
                 mar_text = f"MAR: {current_mar:.3f} ({'YAWN' if is_yawning else 'OK'})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{head_drop_hold_frames})  HeadDrops:{head_drop_count}"
+                perclos_text = f"PERCLOS: {current_perclos:.0%} ({config.PERCLOS_WINDOW_SEC:.0f}s)  Alerts:{perclos_alert_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
                 cv2.putText(frame, mar_text, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_yawning else GREEN, 2)
                 cv2.putText(frame, yaw_text, (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_distracted else GREEN, 2)
                 cv2.putText(frame, pitch_text, (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_head_down else GREEN, 2)
-                cv2.putText(frame, fps_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
+                cv2.putText(frame, perclos_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_perclos_high else GREEN, 2)
+                cv2.putText(frame, fps_text, (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
 
                 if phone_detector:
                     phone_detector.draw(frame)
                     phone_text = f"Phone: {phone_confidence:.2f}  Alerts:{phone_detector.alert_count}"
-                    cv2.putText(frame, phone_text, (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
+                    cv2.putText(frame, phone_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
 
                 frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
                 display.show(frame)
@@ -639,6 +652,6 @@ def run() -> None:
     print(
         f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
         f"  Distractions: {total_distractions}  Head drops: {head_drop_count}"
-        f"  Occlusion alerts: {occlusion_alert_count}{phone_summary}"
+        f"  Occlusion alerts: {occlusion_alert_count}  PERCLOS alerts: {perclos_alert_count}{phone_summary}"
     )
     print(f"[INFO] Per-frame log saved to {frame_log.path}")

@@ -66,8 +66,11 @@ class PhoneDetector:
         phone_detected = confidence >= config.PHONE_CONF_THRESHOLD
         low_conf_detected = confidence >= config.PHONE_LOW_CONF_THRESHOLD
 
-        self.confirm_buffer.append(phone_detected)
-        self.low_conf_buffer.append(low_conf_detected)
+        # Only record a sample on frames where inference actually ran, so a
+        # single detection isn't counted once per skipped frame too.
+        if should_run_inference:
+            self.confirm_buffer.append(phone_detected)
+            self.low_conf_buffer.append(low_conf_detected)
 
         phone_alert_fired = False
         if self._is_phone_confirmed() and (now - self.last_alert_time) > config.PHONE_COOLDOWN_SEC:
