@@ -47,20 +47,22 @@ NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start deca
 # Yawn detection (Mouth Aspect Ratio)
 # ─────────────────────────────────────────────
 
-MAR_THRESHOLD = 0.3          # mouth-open ratio above which counts as "open"
+MAR_THRESHOLD = 0.35          # mouth-open ratio above which counts as "open"
 MAR_SMOOTHING_ALPHA = 0.4    # EMA factor; damps landmark jitter around the threshold
-YAWN_HOLD_SEC = 1.0          # seconds mouth must stay open continuously to count as a yawn
-YAWN_COOLDOWN_SEC = 0.5
+YAWN_HOLD_SEC = 0.5          # seconds mouth must stay open continuously to count as a yawn
+YAWN_COOLDOWN_SEC = 4.0
+YAWN_MAX_MAR_VARIANCE = 0.5   # max MAR swing during the hold to still count as one steady yawn
 
 # Oscillation filter: a yawn is one open->hold->close; talking/laughing/singing
 # opens and closes repeatedly. Reject if rising edges exceed this in the window.
-YAWN_TRANSITION_WINDOW = 30
-YAWN_MAX_TRANSITIONS = 1
+YAWN_MAX_TRANSITIONS = 2
+
+CORNER_LIFT_MAX = 8.0   # max corner-lift angle (degrees) to count as a yawn (rejects smiles)
+OSCILLATION_WINDOW_SEC = 3.0   # seconds over which to count rising edges for oscillation
 
 # Optional smile/laugh rejection, off by default -- experimental, validate
 # against real footage before enabling.
 YAWN_REQUIRE_SYMMETRIC = True
-YAWN_SYMMETRY_MAX_OFFSET = 0.25
 
 # MediaPipe mouth landmarks: top inner lip, bottom inner lip, left corner, right corner
 MOUTH_TOP = 13
@@ -134,7 +136,7 @@ PHONE_DETECT_EVERY_N_FRAMES = 3
 
 # Low-confidence tier for occluded/edge-on/calling-position views; needs a
 # longer sustained window since one low-confidence frame is unreliable.
-PHONE_LOW_CONF_THRESHOLD = 1.0
+PHONE_LOW_CONF_THRESHOLD = 0.45
 PHONE_LOW_CONF_WINDOW = 10
 PHONE_LOW_CONF_FRAMES = 7
 
@@ -202,3 +204,67 @@ LOG_DIR = os.path.join(
 
 FRAME_LOG_FLUSH_EVERY_N = 30   # flush/fsync every N rows instead of every row (SD-card wear)
 LOG_RETENTION_DAYS = 14        # delete log files older than this at startup
+
+
+# ─────────────────────────────────────────────
+# Blink visibility detection (IR-blocking sunglasses, etc.)
+# ─────────────────────────────────────────────
+NO_BLINK_TIMEOUT_SEC = 10.0  
+MAX_BLINK_FRAMES = 15  
+OCCLUSION_ALERT_REPEAT_SEC = 30.0
+OCCLUSION_HEAD_DROP_HOLD_FRAMES = 2
+
+# ─────────────────────────────────────────────
+# PERCLOS (rolling percentage of eye closure)
+# ─────────────────────────────────────────────
+PERCLOS_WINDOW_SEC = 60.0        # rolling window over which closure % is computed
+PERCLOS_ALERT_THRESHOLD = 0.40   # fraction of window closed to trigger an alert
+PERCLOS_COOLDOWN_SEC = 10.0
+
+# ─────────────────────────────────────────────
+# Smoking detection (hand-to-mouth gesture + cigarette object detection)
+# ─────────────────────────────────────────────
+SMOKING_DETECTION_ENABLED = True
+
+# MediaPipe hand landmarker model, same download pattern as MODEL_PATH above.
+HAND_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
+    "hand_landmarker.task",
+)
+HAND_MODEL_DOWNLOAD_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+)
+MAX_HANDS = 2
+
+# MediaPipe Hands landmark indices.
+HAND_THUMB_TIP_IDX = 4
+HAND_INDEX_TIP_IDX = 8
+
+# A hand counts as "near mouth" when its pinch point is closer to the mouth
+# than this, as a ratio of interocular distance (scale-invariant, same idea
+# as EAR/MAR normalizing by a facial distance instead of raw pixels).
+HAND_NEAR_MOUTH_RATIO = 1.1
+
+# Cigarette object detection (YOLO NCNN export, same folder layout as the
+# phone model). Only runs while a hand is near the mouth -- see smoking.py.
+SMOKING_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
+    "smoking_detection_ncnn_model",
+)
+SMOKING_CLASS_NAME = "cigarette"
+SMOKING_IMG_SIZE = 640
+SMOKING_CONF_THRESHOLD = 0.6
+SMOKING_DETECT_EVERY_N_FRAMES = 3
+SMOKING_CONFIRM_FRAMES = 3
+SMOKING_CONFIRM_WINDOW = 5
+
+# Smoking is a repeated hand-to-mouth motion, unlike a single touch
+# (scratch, yawn cover) or a sustained hold (phone call) -- require a few
+# cycles in the window, not just one.
+SMOKING_CYCLE_WINDOW_SEC = 45.0
+SMOKING_MIN_CYCLES = 2
+
+SMOKING_COOLDOWN_SEC = 20.0
