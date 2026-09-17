@@ -35,7 +35,7 @@ import time
 from collections import deque
 
 import cv2
-import config
+import config 
 
 # ─────────────────────────────────────────────
 # Landmark indices (MediaPipe FaceMesh / Hands topology)

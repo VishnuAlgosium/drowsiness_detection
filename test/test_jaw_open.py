@@ -40,9 +40,9 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
-from drowsiness_detection.drowsy_detect import config
-from drowsiness_detection.drowsy_detect.display import LazyDisplay
-from drowsiness_detection.drowsy_detect.keyboard_input import KeyReader
+from drowsy_detect import config
+from drowsy_detect.display import LazyDisplay
+from drowsy_detect.keyboard_input import KeyReader
 
 import math
 

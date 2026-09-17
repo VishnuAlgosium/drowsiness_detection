@@ -20,8 +20,8 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-import config
-from gaze import head_pose_angles
+import test.config as config
+from test.gaze import head_pose_angles
 
 CAM_INDEX = 0  # change if your camera isn't index 0
 

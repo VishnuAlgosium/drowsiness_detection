@@ -154,7 +154,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 2   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
