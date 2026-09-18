@@ -46,6 +46,7 @@ class PhoneDetector:
 
         self.frame_num = 0
         self.last_results = None  # cached between skipped frames so the box doesn't flicker
+        self.last_confidence = 0.0  # cached alongside last_results, avoids recomputing on skipped frames
 
     def process(self, frame, now: float):
         """
@@ -55,14 +56,17 @@ class PhoneDetector:
         Returns (phone_detected, confidence, phone_alert_fired, distraction_alert_fired).
         """
         self.frame_num += 1
-        should_run_inference = (self.frame_num % config.PHONE_DETECT_EVERY_N_FRAMES) == 0
+        should_run_inference = (
+            self.frame_num % config.PHONE_DETECT_EVERY_N_FRAMES
+        ) == config.PHONE_DETECT_OFFSET
 
         if should_run_inference:
             self.last_results = self.model.predict(
                 source=frame, imgsz=config.PHONE_IMG_SIZE, verbose=False, device="cpu"
             )
+            self.last_confidence = self._max_phone_confidence(self.last_results)
 
-        confidence = self._max_phone_confidence(self.last_results)
+        confidence = self.last_confidence
         phone_detected = confidence >= config.PHONE_CONF_THRESHOLD
         low_conf_detected = confidence >= config.PHONE_LOW_CONF_THRESHOLD
 

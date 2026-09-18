@@ -39,6 +39,7 @@ class SeatbeltDetector:
 
         self.frame_num = 0
         self.last_results = None
+        self.last_confidence = 0.0  # cached alongside last_results, avoids recomputing on skipped frames
         self.start_time = time.monotonic()
 
     def process(self, frame, now: float):
@@ -49,14 +50,17 @@ class SeatbeltDetector:
         Returns (seatbelt_present, confidence, alert_fired).
         """
         self.frame_num += 1
-        should_run_inference = (self.frame_num % config.SEATBELT_DETECT_EVERY_N_FRAMES) == 0
+        should_run_inference = (
+            self.frame_num % config.SEATBELT_DETECT_EVERY_N_FRAMES
+        ) == config.SEATBELT_DETECT_OFFSET
 
         if should_run_inference:
             self.last_results = self.model.predict(
                 source=frame, imgsz=config.SEATBELT_IMG_SIZE, verbose=False, device="cpu"
             )
+            self.last_confidence = self._max_seatbelt_confidence(self.last_results)
 
-        confidence = self._max_seatbelt_confidence(self.last_results)
+        confidence = self.last_confidence
         seatbelt_present = confidence >= config.SEATBELT_CONF_THRESHOLD
 
         past_grace_period = (time.monotonic() - self.start_time) > config.SEATBELT_STARTUP_GRACE_SEC

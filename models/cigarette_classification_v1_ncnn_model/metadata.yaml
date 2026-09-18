@@ -1,0 +1,20 @@
+description: Ultralytics YOLO26s-cls model trained on data/raw/cigarette_classification_split_yolo
+author: Ultralytics
+date: '2026-09-17T15:25:24.741346'
+version: 8.4.78
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 1
+task: classify
+batch: 1
+imgsz:
+- 224
+- 224
+names:
+  0: cigarrete
+  1: nocigarrete
+args:
+  batch: 1
+  half: false
+channels: 3
+end2end: false

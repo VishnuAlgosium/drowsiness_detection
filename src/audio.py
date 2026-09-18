@@ -10,6 +10,8 @@ alert can be identified by ear alone:
     head drop   -> fast three-tone descending sweep
     occlusion   -> two-tone, mid-pitched, ascending (eyes hidden from camera)
     perclos     -> slow triple tone, single pitch (gradual fatigue building)
+    cigarette   -> triple tone, ascending
+    seatbelt    -> double-buzz, repeated twice (car seatbelt chime style)
 """
 
 import numpy as np
@@ -110,6 +112,27 @@ def play_perclos_alert() -> None:
     silence = np.zeros(int(44100 * 0.15), dtype=np.int16)
     beep = _beep(600, 0.2, vol=0.5)
     seq = np.concatenate([beep, silence, beep, silence, beep])
+    _play_sequence(seq)
+
+
+def play_cigarette_alert() -> None:
+    """Ascending triple tone used for cigarette detection (distinct from
+    phone's flat, same-pitch triple beep)."""
+    silence = np.zeros(int(44100 * 0.08), dtype=np.int16)
+    b1 = _beep(700, 0.15, vol=0.55)
+    b2 = _beep(950, 0.15, vol=0.55)
+    b3 = _beep(1200, 0.15, vol=0.55)
+    seq = np.concatenate([b1, silence, b2, silence, b3])
+    _play_sequence(seq)
+
+
+def play_seatbelt_alert() -> None:
+    """Double-buzz repeated twice, mimicking a car's seatbelt chime."""
+    silence = np.zeros(int(44100 * 0.06), dtype=np.int16)
+    gap = np.zeros(int(44100 * 0.2), dtype=np.int16)
+    beep = _beep(400, 0.12, vol=0.65)
+    pair = np.concatenate([beep, silence, beep])
+    seq = np.concatenate([pair, gap, pair])
     _play_sequence(seq)
 
 

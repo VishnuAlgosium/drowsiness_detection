@@ -122,7 +122,7 @@ PHONE_DETECTION_ENABLED = True
 PHONE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "models",
-    "phone_detection_v4_ncnn_model",
+    "phone_detection_v6_ncnn_model",
 )
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640

@@ -18,14 +18,19 @@ from . import config
 from .alerts import log_alert, FrameLogger, cleanup_old_logs
 from .audio import (
     play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
-    play_head_drop_alert, play_occlusion_alert, play_perclos_alert, shutdown_audio,
+    play_head_drop_alert, play_occlusion_alert, play_perclos_alert,
+    play_cigarette_alert, play_seatbelt_alert, shutdown_audio,
 )
 from .ear import eye_aspect_ratio, average_ear
 from .mar import mouth_aspect_ratio
 from .gaze import head_pose_angles, head_pitch_ratio
+from .face_crop import padded_face_box
 from .blink_visibility import BlinkVisibilityMonitor
 from .perclos import PerclosMonitor
+from .capture import FrameGrabber
 from .phone import PhoneDetector
+from .cigarette import CigaretteDetector
+from .seatbelt import SeatbeltDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
 import math
@@ -79,14 +84,22 @@ def _check_model() -> None:
         print(f"wget -O {config.MODEL_PATH} {config.MODEL_DOWNLOAD_URL}")
         sys.exit(1)
 
-    if config.PHONE_DETECTION_ENABLED:
-        param_file = os.path.join(config.PHONE_MODEL_PATH, "model.ncnn.param")
-        bin_file = os.path.join(config.PHONE_MODEL_PATH, "model.ncnn.bin")
+    ncnn_models = [
+        (config.PHONE_DETECTION_ENABLED, config.PHONE_MODEL_PATH, "phone"),
+        (config.CIGARETTE_DETECTION_ENABLED, config.CIGARETTE_MODEL_PATH, "cigarette"),
+        (config.SEATBELT_DETECTION_ENABLED, config.SEATBELT_MODEL_PATH, "seatbelt"),
+    ]
+    for enabled, model_path, label in ncnn_models:
+        if not enabled:
+            continue
+
+        param_file = os.path.join(model_path, "model.ncnn.param")
+        bin_file = os.path.join(model_path, "model.ncnn.bin")
 
         if not (os.path.exists(param_file) and os.path.exists(bin_file)):
-            print(f"[ERROR] Missing NCNN model files under {config.PHONE_MODEL_PATH}")
-            print("Expected model.ncnn.param and model.ncnn.bin in that folder, or set "
-                  "config.PHONE_DETECTION_ENABLED = False to run drowsiness/yawn only.")
+            print(f"[ERROR] Missing NCNN model files under {model_path}")
+            print(f"Expected model.ncnn.param and model.ncnn.bin in that folder, or set "
+                  f"config.{label.upper()}_DETECTION_ENABLED = False to skip {label} detection.")
             sys.exit(1)
 
 
@@ -101,7 +114,7 @@ def _build_face_landmarker():
         base_options=base_options,
         running_mode=vision.RunningMode.VIDEO,
         num_faces=1,
-        output_face_blendshapes=True,
+        output_face_blendshapes=False,
         output_facial_transformation_matrixes=True,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
@@ -111,12 +124,13 @@ def _build_face_landmarker():
     return vision.FaceLandmarker.create_from_options(options), mp
 
 
-def _read_calibration_sample(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
+def _read_calibration_sample(grabber: FrameGrabber, last_frame_id: int, face_mesh, mp, timestamps: MonotonicTimestamp):
     """One capture+read cycle, reused by the calibration phase below.
-    Returns (ear, yaw, pitch, roll) or None if no face was found."""
-    ret, frame = cap.read()
-    if not ret:
-        return None
+    Returns (sample, frame_id) where sample is (ear, yaw, pitch, roll) or
+    None if no new frame was ready yet or no face was found."""
+    frame, frame_id, _ = grabber.read()
+    if frame is None or frame_id == last_frame_id:
+        return None, last_frame_id
 
     frame = cv2.flip(frame, 1)
     h, w = frame.shape[:2]
@@ -125,7 +139,7 @@ def _read_calibration_sample(cap, face_mesh, mp, timestamps: MonotonicTimestamp)
     face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
     if not face_results.face_landmarks:
-        return None
+        return None, frame_id
 
     landmarks = face_results.face_landmarks[0]
     ear = average_ear(landmarks, config.LEFT_EYE_IDX, config.RIGHT_EYE_IDX, w, h)
@@ -136,10 +150,10 @@ def _read_calibration_sample(cap, face_mesh, mp, timestamps: MonotonicTimestamp)
         if pose_angles:
             yaw, pitch, roll = pose_angles
 
-    return ear, yaw, pitch, roll
+    return (ear, yaw, pitch, roll), frame_id
 
 
-def _calibrate_baseline(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
+def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: MonotonicTimestamp):
     """
     Sample EAR and head pose for config.EAR_CALIBRATION_FRAMES frames while
     the driver looks at the road normally, and derive:
@@ -157,15 +171,18 @@ def _calibrate_baseline(cap, face_mesh, mp, timestamps: MonotonicTimestamp):
           "keep eyes open and look at the road normally)...")
 
     samples = []
+    last_frame_id = -1
     start_time = time.monotonic()
     while len(samples) < config.EAR_CALIBRATION_FRAMES:
         if time.monotonic() - start_time > config.EAR_CALIBRATION_TIMEOUT_SEC:
             print("[WARN] Calibration timed out -- falling back to defaults")
             return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
 
-        sample = _read_calibration_sample(cap, face_mesh, mp, timestamps)
+        sample, last_frame_id = _read_calibration_sample(grabber, last_frame_id, face_mesh, mp, timestamps)
         if sample is not None:
             samples.append(sample)
+        else:
+            time.sleep(0.002)  # no new frame yet; avoid busy-spinning
 
     if not samples:
         print("[WARN] Calibration found no face -- falling back to defaults")
@@ -232,6 +249,8 @@ def run() -> None:
 
     face_mesh, mp = _build_face_landmarker()
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
+    cigarette_detector = CigaretteDetector() if config.CIGARETTE_DETECTION_ENABLED else None
+    seatbelt_detector = SeatbeltDetector() if config.SEATBELT_DETECTION_ENABLED else None
 
     if config.RTSP_URL.strip():
         print(f"[INFO] Using RTSP stream: {config.RTSP_URL.strip()}")
@@ -244,9 +263,11 @@ def run() -> None:
         print("[ERROR] Cannot open webcam")
         sys.exit(1)
 
+    grabber = FrameGrabber(cap)
+
     timestamps = MonotonicTimestamp()
     ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = _calibrate_baseline(
-        cap, face_mesh, mp, timestamps
+        grabber, face_mesh, mp, timestamps
     )
 
     display = LazyDisplay(config.DISPLAY_W, config.DISPLAY_H, config.CAM_FPS)
@@ -306,6 +327,8 @@ def run() -> None:
     held_sec = 0.0
 
     frame_num = 0
+    last_frame_id = -1
+    session_start_time = time.monotonic()
 
     print()
     print("[INFO] Running")
@@ -317,13 +340,11 @@ def run() -> None:
                 print("[INFO] Shutdown signal received")
                 break
 
-            frame_start = time.perf_counter()
-            now = time.time()
+            frame, frame_id, frame_age_sec = grabber.read()
 
-            ret, frame = cap.read()
-
-            if not ret:
+            if frame_age_sec > config.CAMERA_STALE_FRAME_TIMEOUT_SEC:
                 print("[WARN] Camera frame failed, attempting reconnect")
+                grabber.release()
                 cap.release()
 
                 reconnected = False
@@ -339,7 +360,17 @@ def run() -> None:
                     print("[ERROR] Camera reconnect failed, exiting")
                     break
 
+                grabber = FrameGrabber(cap)
+                last_frame_id = -1
                 continue
+
+            if frame is None or frame_id == last_frame_id:
+                time.sleep(0.002)  # no new frame yet; avoid busy-spinning
+                continue
+            last_frame_id = frame_id
+
+            frame_start = time.perf_counter()
+            now = time.time()
 
             frame_num += 1
             frame = cv2.flip(frame, 1)
@@ -351,6 +382,7 @@ def run() -> None:
 
             current_ear = 0.0
             current_mar = 0.0
+            face_crop = None
 
             if face_results.face_landmarks:
                 landmarks = face_results.face_landmarks[0]
@@ -365,6 +397,8 @@ def run() -> None:
                     config.MOUTH_LEFT, config.MOUTH_RIGHT,
                     w, h,
                 )
+                x1, y1, x2, y2 = padded_face_box(landmarks, w, h, config.CIGARETTE_FACE_PADDING)
+                face_crop = frame[y1:y2, x1:x2]
 
                 # Smooth MAR so a single noisy frame at the threshold can't flip mouth-open state.
                 smoothed_mar = current_mar if smoothed_mar is None else (
@@ -576,10 +610,29 @@ def run() -> None:
                     print(f"[DISTRACTION #{phone_detector.distraction_count}] Possible phone (low confidence) conf={phone_confidence:.3f}")
                     play_distraction_alert()
 
+            # ── Cigarette-use alert ──
+            cigarette_detected = False
+            cigarette_confidence = 0.0
+            if cigarette_detector:
+                cigarette_detected, cigarette_confidence, cigarette_alert_fired = cigarette_detector.process(face_crop, now)
+                if cigarette_alert_fired:
+                    print(f"[CIGARETTE #{cigarette_detector.alert_count}] Cigarette detected conf={cigarette_confidence:.3f}")
+                    play_cigarette_alert()
+
+            # ── Seatbelt alert (fires on sustained ABSENCE, not detection) ──
+            seatbelt_present = True
+            seatbelt_confidence = 0.0
+            if seatbelt_detector:
+                seatbelt_present, seatbelt_confidence, seatbelt_alert_fired = seatbelt_detector.process(frame, now)
+                if seatbelt_alert_fired:
+                    print(f"[SEATBELT #{seatbelt_detector.alert_count}] No seatbelt detected conf={seatbelt_confidence:.3f}")
+                    play_seatbelt_alert()
+
             frame_elapsed = time.perf_counter() - frame_start
             current_fps = 1.0 / frame_elapsed if frame_elapsed > 0 else 0.0
             frame_log.write(
-                frame_num, current_ear, current_mar, phone_confidence, current_perclos,
+                frame_num, current_ear, current_mar, phone_confidence,
+                cigarette_confidence, seatbelt_confidence, current_perclos,
                 current_yaw_deg, current_pitch_deg, current_roll_deg, current_pitch_ratio,
                 current_fps,
             )
@@ -613,11 +666,21 @@ def run() -> None:
                 cv2.putText(frame, fps_text, (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
 
                 if phone_detector:
-                    phone_detector.draw(frame)
+                    # phone_detector.draw(frame)
                     phone_text = f"Phone: {phone_confidence:.2f}  Alerts:{phone_detector.alert_count}"
                     cv2.putText(frame, phone_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
 
-                frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
+                if cigarette_detector:
+                    cigarette_text = f"Cigarette: {cigarette_confidence:.2f}  Alerts:{cigarette_detector.alert_count}"
+                    cv2.putText(frame, cigarette_text, (10, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if cigarette_detected else GREEN, 2)
+
+                if seatbelt_detector:
+                    # seatbelt_detector.draw(frame)
+                    seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
+                    cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
+
+                if (w, h) != (config.DISPLAY_W, config.DISPLAY_H):
+                    frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
                 display.show(frame)
 
             # ── Keyboard ──
@@ -643,15 +706,27 @@ def run() -> None:
     finally:
         keys.restore()
         display.stop()
+        grabber.release()
         cap.release()
         shutdown_audio()
         frame_log.close()
 
+    # Real throughput -- frames processed over wall-clock time. Do NOT average
+    # the per-frame fps column instead: a single near-instant frame (already
+    # buffered by the camera) makes 1/frame_elapsed spike into the hundreds
+    # and skews an arithmetic mean far above what the pipeline actually sustained.
+    session_elapsed = time.monotonic() - session_start_time
+    avg_fps = frame_num / session_elapsed if session_elapsed > 0 else 0.0
+
     phone_summary = f"  Phone alerts: {phone_detector.alert_count}" if phone_detector else ""
+    cigarette_summary = f"  Cigarette alerts: {cigarette_detector.alert_count}" if cigarette_detector else ""
+    seatbelt_summary = f"  Seatbelt alerts: {seatbelt_detector.alert_count}" if seatbelt_detector else ""
     total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
     print(
         f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
         f"  Distractions: {total_distractions}  Head drops: {head_drop_count}"
-        f"  Occlusion alerts: {occlusion_alert_count}  PERCLOS alerts: {perclos_alert_count}{phone_summary}"
+        f"  Occlusion alerts: {occlusion_alert_count}  PERCLOS alerts: {perclos_alert_count}"
+        f"{phone_summary}{cigarette_summary}{seatbelt_summary}"
     )
+    print(f"[INFO] Processed {frame_num} frames in {session_elapsed:.1f}s -- avg {avg_fps:.1f} fps")
     print(f"[INFO] Per-frame log saved to {frame_log.path}")

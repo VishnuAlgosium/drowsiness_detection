@@ -5,9 +5,7 @@ mediapipe==1.0.0
 scipy==1.18.0
 pygame==2.6.1
 
-
-# Phone Detection
-ultralytics
-ncnn
-torch
-
+# Phone / Cigarette / Seatbelt Detection
+ultralytics==8.4.154
+ncnn==1.0.20260526
+torch==2.14.0

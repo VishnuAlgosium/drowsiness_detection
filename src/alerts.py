@@ -61,7 +61,12 @@ def cleanup_old_logs(retention_days: int = None) -> None:
 
 
 class FrameLogger:
-    """Per-frame CSV of all three signals, written once per loop iteration."""
+    """Per-frame CSV of all three signals, written once per loop iteration.
+
+    The fps column is instantaneous (1/frame_elapsed) and can spike into the
+    hundreds on a single already-buffered frame -- don't average this column
+    for a session's throughput. Use total_frames / total_wall_time instead
+    (see the "avg fps" line detector.py prints at session end)."""
 
     def __init__(self):
         os.makedirs(config.LOG_DIR, exist_ok=True)
@@ -72,12 +77,14 @@ class FrameLogger:
         self._writer = csv.writer(self._file)
         self._writer.writerow(
             ["timestamp", "frame_num", "ear", "mar", "phone_confidence",
-             "perclos", "yaw_deg", "pitch_deg", "roll_deg", "pitch_ratio", "fps"]
+             "cigarette_confidence", "seatbelt_confidence", "perclos", "yaw_deg",
+             "pitch_deg", "roll_deg", "pitch_ratio", "fps"]
         )
         self._rows_since_flush = 0
 
     def write(self, frame_num: int, ear: float, mar: float, phone_confidence: float,
-              perclos: float, yaw_deg: float, pitch_deg: float, roll_deg: float,
+              cigarette_confidence: float, seatbelt_confidence: float, perclos: float,
+              yaw_deg: float, pitch_deg: float, roll_deg: float,
               pitch_ratio: float, fps: float) -> None:
         self._writer.writerow([
             datetime.now().isoformat(),
@@ -85,6 +92,8 @@ class FrameLogger:
             f"{ear:.3f}",
             f"{mar:.3f}",
             f"{phone_confidence:.3f}",
+            f"{cigarette_confidence:.3f}",
+            f"{seatbelt_confidence:.3f}",
             f"{perclos:.3f}",
             f"{yaw_deg:.1f}",
             f"{pitch_deg:.1f}",

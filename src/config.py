@@ -122,7 +122,7 @@ PHONE_DETECTION_ENABLED = True
 PHONE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "models",
-    "phone_detection_v4_ncnn_model",
+    "phone_detection_v6_ncnn_model",
 )
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
@@ -133,12 +133,66 @@ PHONE_COOLDOWN_SEC = 5.0
 
 # YOLO on CPU is heavy; run every Nth frame to keep capture/display from lagging.
 PHONE_DETECT_EVERY_N_FRAMES = 3
+# Offsets stagger phone/cigarette/seatbelt inference across different frames
+# instead of all three landing on the same frame, which smooths per-frame CPU load.
+PHONE_DETECT_OFFSET = 0
 
 # Low-confidence tier for occluded/edge-on/calling-position views; needs a
 # longer sustained window since one low-confidence frame is unreliable.
 PHONE_LOW_CONF_THRESHOLD = 0.45
 PHONE_LOW_CONF_WINDOW = 10
 PHONE_LOW_CONF_FRAMES = 7
+
+# ─────────────────────────────────────────────
+# Cigarette detection (YOLO classification model)
+# ─────────────────────────────────────────────
+
+CIGARETTE_DETECTION_ENABLED = True
+
+CIGARETTE_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
+    "cigarette_classification_v1_ncnn_model",
+)
+CIGARETTE_CLASS_NAME = "cigarrete"   # the other class is "nocigarette"
+CIGARETTE_IMG_SIZE = 224
+CIGARETTE_FACE_PADDING = 0.3   # padding ratio around the face box before classifying
+CIGARETTE_CONF_THRESHOLD = 0.7
+CIGARETTE_CONFIRM_FRAMES = 3
+CIGARETTE_CONFIRM_WINDOW = 5
+CIGARETTE_COOLDOWN_SEC = 5.0
+
+# Classification is cheap relative to detection, but keep the same
+# every-Nth-frame pattern as phone/seatbelt for a consistent CPU budget.
+CIGARETTE_DETECT_EVERY_N_FRAMES = 3
+CIGARETTE_DETECT_OFFSET = 1
+
+# ─────────────────────────────────────────────
+# Seatbelt detection (YOLO detection model)
+# ─────────────────────────────────────────────
+
+SEATBELT_DETECTION_ENABLED = True
+
+SEATBELT_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
+    "seatbelt_detection_v1_ncnn_model",
+)
+SEATBELT_CLASS_NAME = "seatbelt"
+SEATBELT_IMG_SIZE = 640
+SEATBELT_CONF_THRESHOLD = 0.6
+SEATBELT_DETECT_EVERY_N_FRAMES = 3
+SEATBELT_DETECT_OFFSET = 2
+
+# The model detects the seatbelt itself, so the violation is its ABSENCE
+# over a sustained window, not a detection -- inverse of phone/cigarette.
+SEATBELT_ABSENT_WINDOW = 30
+SEATBELT_ABSENT_FRAMES = 24
+SEATBELT_COOLDOWN_SEC = 15.0
+
+# Grace period after startup so the driver has time to buckle up before
+# absence starts counting toward an alert.
+SEATBELT_STARTUP_GRACE_SEC = 8.0
 
 # ─────────────────────────────────────────────
 # Display defaults
@@ -154,10 +208,14 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 2   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
+
+# How long the background FrameGrabber can go without a new frame before
+# the main loop treats the camera as dead and starts reconnecting.
+CAMERA_STALE_FRAME_TIMEOUT_SEC = 2.0
 
 EAR_CALIBRATION_TIMEOUT_SEC = 15.0   # hard cap so a missing/dark camera can't hang startup
 
