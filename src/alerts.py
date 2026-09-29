@@ -1,7 +1,7 @@
 """
 alerts.py
 ---------
-Shared logging for all three detectors (phone, drowsiness, yawn):
+Shared logging for all detectors:
 
 - log_alert(): one JSONL line per alert, for an audit trail of events.
 - FrameLogger: one CSV row per frame with all detector signals, so QA can
@@ -61,7 +61,7 @@ def cleanup_old_logs(retention_days: int = None) -> None:
 
 
 class FrameLogger:
-    """Per-frame CSV of all three signals, written once per loop iteration.
+    """Per-frame CSV of all detector signals, written once per loop iteration.
 
     The fps column is instantaneous (1/frame_elapsed) and can spike into the
     hundreds on a single already-buffered frame -- don't average this column
@@ -76,19 +76,20 @@ class FrameLogger:
         self._file = open(self.path, "w", newline="")
         self._writer = csv.writer(self._file)
         self._writer.writerow(
-            ["timestamp", "frame_num", "ear", "mar", "phone_confidence",
+            ["timestamp", "frame_num", "face_detected", "ear", "mar", "phone_confidence",
              "cigarette_confidence", "seatbelt_confidence", "perclos", "yaw_deg",
              "pitch_deg", "roll_deg", "pitch_ratio", "fps"]
         )
         self._rows_since_flush = 0
 
-    def write(self, frame_num: int, ear: float, mar: float, phone_confidence: float,
+    def write(self, frame_num: int, face_detected: bool, ear: float, mar: float, phone_confidence: float,
               cigarette_confidence: float, seatbelt_confidence: float, perclos: float,
               yaw_deg: float, pitch_deg: float, roll_deg: float,
               pitch_ratio: float, fps: float) -> None:
         self._writer.writerow([
             datetime.now().isoformat(),
             frame_num,
+            int(face_detected),
             f"{ear:.3f}",
             f"{mar:.3f}",
             f"{phone_confidence:.3f}",

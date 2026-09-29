@@ -5,18 +5,19 @@ Seatbelt detection via a YOLO NCNN detection model. The model detects the
 seatbelt itself, so unlike phone/cigarette (alert on detection), the
 violation here is the seatbelt being ABSENT over a sustained window.
 
-A startup grace period keeps the absence buffer from filling up before
+A startup grace period keeps the absence window from filling up before
 the driver has even had a chance to buckle up.
 """
 
+import math
 import time
-from collections import deque
 
 import cv2
 from ultralytics import YOLO
 
 from . import config
 from .alerts import log_alert
+from .vote_window import VoteWindow
 
 
 class SeatbeltDetector:
@@ -32,9 +33,11 @@ class SeatbeltDetector:
                 f"'{config.SEATBELT_CLASS_NAME}' not found in model classes: {self.model.names}"
             )
 
-        self.absent_buffer = deque(maxlen=config.SEATBELT_ABSENT_WINDOW)
+        self.absent_votes = VoteWindow(
+            config.SEATBELT_ABSENT_WINDOW_SEC, config.SEATBELT_ABSENT_RATIO, config.DETECTOR_MIN_VOTES
+        )
 
-        self.last_alert_time = 0.0
+        self.last_alert_time = -math.inf
         self.alert_count = 0
 
         self.frame_num = 0
@@ -63,12 +66,12 @@ class SeatbeltDetector:
         confidence = self.last_confidence
         seatbelt_present = confidence >= config.SEATBELT_CONF_THRESHOLD
 
-        past_grace_period = (time.monotonic() - self.start_time) > config.SEATBELT_STARTUP_GRACE_SEC
+        past_grace_period = (now - self.start_time) > config.SEATBELT_STARTUP_GRACE_SEC
         if should_run_inference and past_grace_period:
-            self.absent_buffer.append(not seatbelt_present)
+            self.absent_votes.add(now, not seatbelt_present)
 
         alert_fired = False
-        if self._is_absence_confirmed() and (now - self.last_alert_time) > config.SEATBELT_COOLDOWN_SEC:
+        if self.absent_votes.is_confirmed(now) and (now - self.last_alert_time) > config.SEATBELT_COOLDOWN_SEC:
             self.last_alert_time = now
             self.alert_count += 1
             alert_fired = True
@@ -76,7 +79,7 @@ class SeatbeltDetector:
                 event_type="no_seatbelt_detected",
                 details={
                     "confidence": round(confidence, 3),
-                    "frames_absent": f"{sum(self.absent_buffer)}/{config.SEATBELT_ABSENT_WINDOW}",
+                    "frames_absent": f"{self.absent_votes.positives}/{len(self.absent_votes)}",
                 },
             )
 
@@ -107,9 +110,3 @@ class SeatbeltDetector:
             if int(box.cls.item()) == self.seatbelt_class_idx
         ]
         return max(confidences) if confidences else 0.0
-
-    def _is_absence_confirmed(self) -> bool:
-        return (
-            len(self.absent_buffer) == config.SEATBELT_ABSENT_WINDOW
-            and sum(self.absent_buffer) >= config.SEATBELT_ABSENT_FRAMES
-        )

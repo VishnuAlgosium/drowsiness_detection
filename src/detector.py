@@ -1,9 +1,9 @@
 """
 detector.py
 -----------
-Ties together camera capture, MediaPipe FaceLandmarker (EAR/MAR), YOLO
-phone detection, display, keyboard control, and audio/log alerting into
-one shared run loop.
+Ties together camera capture, MediaPipe FaceLandmarker (EAR/MAR/head pose),
+the YOLO detectors (phone, cigarette, seatbelt), display, keyboard control,
+and audio/log alerting into one shared run loop.
 """
 
 import os
@@ -101,6 +101,18 @@ def _check_model() -> None:
             print(f"Expected model.ncnn.param and model.ncnn.bin in that folder, or set "
                   f"config.{label.upper()}_DETECTION_ENABLED = False to skip {label} detection.")
             sys.exit(1)
+
+
+def _check_inference_stagger() -> None:
+    """Warn if the YOLO detectors can land on the same frame (or never run)."""
+    intervals = {
+        config.PHONE_DETECT_EVERY_N_FRAMES,
+        config.CIGARETTE_DETECT_EVERY_N_FRAMES,
+        config.SEATBELT_DETECT_EVERY_N_FRAMES,
+    }
+    offsets = [config.PHONE_DETECT_OFFSET, config.CIGARETTE_DETECT_OFFSET, config.SEATBELT_DETECT_OFFSET]
+    if len(intervals) != 1 or len(set(offsets)) != len(offsets) or max(offsets) >= min(intervals):
+        print("[WARN] YOLO *_DETECT_EVERY_N_FRAMES / *_DETECT_OFFSET overlap -- models may share frames")
 
 
 def _build_face_landmarker():
@@ -245,6 +257,7 @@ def run() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
     _check_model()
+    _check_inference_stagger()
     cleanup_old_logs()
 
     face_mesh, mp = _build_face_landmarker()
@@ -279,22 +292,22 @@ def run() -> None:
     keys = KeyReader()
     frame_log = FrameLogger()
 
-    counter = 0
+    eyes_closed_sec = 0.0
     alert_count = 0
-    last_alert = 0.0
+    last_alert = -math.inf
     smoothed_ear = None
-    no_face_streak = 0
+    face_lost_at = None
     eyes_occluded = False
     occlusion_alert_count = 0
-    last_occlusion_alert = 0.0
+    last_occlusion_alert = -math.inf
     blink_monitor = BlinkVisibilityMonitor(
-        config.NO_BLINK_TIMEOUT_SEC, ear_threshold, config.MAX_BLINK_FRAMES
+        config.NO_BLINK_TIMEOUT_SEC, ear_threshold, config.MAX_BLINK_SEC
     )
 
     perclos_monitor = PerclosMonitor(config.PERCLOS_WINDOW_SEC)
     current_perclos = 0.0
     perclos_alert_count = 0
-    last_perclos_alert = 0.0
+    last_perclos_alert = -math.inf
 
     smoothed_mar = None
     mouth_open_start = None   # wall-clock time MAR first crossed MAR_THRESHOLD, or None
@@ -306,20 +319,20 @@ def run() -> None:
     gaze_away_start = None
     gaze_away_elapsed = 0.0
     gaze_distraction_count = 0
-    last_gaze_alert = 0.0
+    last_gaze_alert = -math.inf
     current_yaw_deg = 0.0
     current_pitch_deg = 0.0
     current_roll_deg = 0.0
 
-    head_drop_counter = 0
+    head_down_sec = 0.0
     head_drop_count = 0
-    last_head_drop_alert = 0.0
+    last_head_drop_alert = -math.inf
     current_pitch_ratio = 0.5
     smoothed_pitch_ratio = None
     is_head_down = False
     pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
     
-    last_yawn_time = -999.0
+    last_yawn_time = -math.inf
     smoothed_lift_angle = None
     yawn_confirmed = False
     
@@ -328,6 +341,7 @@ def run() -> None:
 
     frame_num = 0
     last_frame_id = -1
+    prev_frame_time = None
     session_start_time = time.monotonic()
 
     print()
@@ -362,6 +376,7 @@ def run() -> None:
 
                 grabber = FrameGrabber(cap)
                 last_frame_id = -1
+                prev_frame_time = None
                 continue
 
             if frame is None or frame_id == last_frame_id:
@@ -370,7 +385,9 @@ def run() -> None:
             last_frame_id = frame_id
 
             frame_start = time.perf_counter()
-            now = time.time()
+            now = time.monotonic()
+            frame_dt = now - prev_frame_time if prev_frame_time is not None else 0.0
+            prev_frame_time = now
 
             frame_num += 1
             frame = cv2.flip(frame, 1)
@@ -386,7 +403,7 @@ def run() -> None:
 
             if face_results.face_landmarks:
                 landmarks = face_results.face_landmarks[0]
-                no_face_streak = 0
+                face_lost_at = None
 
                 left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
                 right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
@@ -424,7 +441,7 @@ def run() -> None:
                 )
                 if looking_away:
                     if gaze_away_start is None:
-                        gaze_away_start = time.time()
+                        gaze_away_start = now
                 else:
                     gaze_away_start = None
 
@@ -441,9 +458,9 @@ def run() -> None:
                     pitch_history.popleft()
 
                 is_head_down = smoothed_pitch_ratio > config.PITCH_RATIO_DOWN
-                head_drop_counter = head_drop_counter + 1 if is_head_down else max(0, head_drop_counter - 1)
+                head_down_sec = head_down_sec + frame_dt if is_head_down else max(0.0, head_down_sec - frame_dt)
 
-                # Smooth EAR so a single noisy frame can't flip the counter.
+                # Smooth EAR so a single noisy frame can't flip the closure timer.
                 smoothed_ear = current_ear if smoothed_ear is None else (
                     config.EAR_SMOOTHING_ALPHA * current_ear
                     + (1 - config.EAR_SMOOTHING_ALPHA) * smoothed_ear
@@ -453,7 +470,7 @@ def run() -> None:
                 # Both eyes must agree they're closed -- rejects winks/side glances.
                 eyes_agree = abs(left_ear - right_ear) < config.EAR_ASYMMETRY_MAX
                 eyes_closed = smoothed_ear < ear_threshold and eyes_agree
-                counter = counter + 1 if eyes_closed else max(0, counter - 1)
+                eyes_closed_sec = eyes_closed_sec + frame_dt if eyes_closed else max(0.0, eyes_closed_sec - frame_dt)
 
                 # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed --
                 # rises with frequent/long blinks, ahead of a single sustained closure.
@@ -506,10 +523,14 @@ def run() -> None:
                     yawn_confirmed = False
                 
             else:
-                no_face_streak += 1
+                # Don't log the last seen pose as if it were current.
+                current_yaw_deg = current_pitch_deg = current_roll_deg = 0.0
+                current_pitch_ratio = 0.5
+                if face_lost_at is None:
+                    face_lost_at = now
                 # Tolerate brief tracking loss before decaying counters.
-                if no_face_streak > config.NO_FACE_GRACE_FRAMES:
-                    counter = max(0, counter - 1)
+                if now - face_lost_at > config.NO_FACE_GRACE_SEC:
+                    eyes_closed_sec = max(0.0, eyes_closed_sec - frame_dt)
                     mouth_open_start = None
                     smoothed_mar = None
                     smoothed_lift_angle = None
@@ -518,19 +539,17 @@ def run() -> None:
                     yawn_confirmed = False
                     last_yawn_confirmed = False
                     gaze_away_start = None
-                    head_drop_counter = max(0, head_drop_counter - 1)
+                    head_down_sec = max(0.0, head_down_sec - frame_dt)
                     pitch_history.clear()
                     blink_monitor.reset()
                     eyes_occluded = False
                     perclos_monitor.reset()
                     current_perclos = 0.0
 
-            now = time.time()
-
             # ── Drowsiness alert (eyes) ──
             # Skipped while eyes_occluded: EAR is unreliable, so head-drop
             # (tightened below) becomes the primary fallback signal.
-            if counter >= config.CONSEC_FRAMES and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
+            if eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
                 alert_count += 1
                 print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f}")
                 play_alert()
@@ -585,12 +604,12 @@ def run() -> None:
             # ── Head drop alert (sudden nod, held down) ──
             # Shorter hold required while eyes are occluded, since head-drop
             # is the primary fallback signal when EAR can't be trusted.
-            head_drop_hold_frames = (
-                config.OCCLUSION_HEAD_DROP_HOLD_FRAMES if eyes_occluded else config.HEAD_DROP_HOLD_FRAMES
+            head_drop_hold_sec = (
+                config.OCCLUSION_HEAD_DROP_HOLD_SEC if eyes_occluded else config.HEAD_DROP_HOLD_SEC
             )
             window_full = bool(pitch_history) and (now - pitch_history[0][0]) >= config.HEAD_DROP_WINDOW_SEC * 0.9
             pitch_rise = (smoothed_pitch_ratio - min(v for _, v in pitch_history)) if window_full else 0.0
-            head_drop_confirmed = head_drop_counter >= head_drop_hold_frames and pitch_rise >= config.HEAD_DROP_DELTA
+            head_drop_confirmed = head_down_sec >= head_drop_hold_sec and pitch_rise >= config.HEAD_DROP_DELTA
             if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
                 head_drop_count += 1
                 print(f"[HEAD DROP #{head_drop_count}] pitch_ratio={current_pitch_ratio:.3f} rise={pitch_rise:.3f}")
@@ -631,7 +650,7 @@ def run() -> None:
             frame_elapsed = time.perf_counter() - frame_start
             current_fps = 1.0 / frame_elapsed if frame_elapsed > 0 else 0.0
             frame_log.write(
-                frame_num, current_ear, current_mar, phone_confidence,
+                frame_num, bool(face_results.face_landmarks), current_ear, current_mar, phone_confidence,
                 cigarette_confidence, seatbelt_confidence, current_perclos,
                 current_yaw_deg, current_pitch_deg, current_roll_deg, current_pitch_ratio,
                 current_fps,
@@ -639,7 +658,7 @@ def run() -> None:
 
             # ── Display ──
             if display_on:
-                is_drowsy = counter >= config.CONSEC_FRAMES
+                is_drowsy = eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC
                 is_yawning = yawn_confirmed
 
                 GREEN = (0, 255, 0)
@@ -651,10 +670,10 @@ def run() -> None:
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 occlusion_text = " [EYES OCCLUDED]" if eyes_occluded else ""
-                ear_text = f"EAR: {current_ear:.3f} ({counter}/{config.CONSEC_FRAMES})  Alerts:{alert_count}{occlusion_text}"
+                ear_text = f"EAR: {current_ear:.3f} ({eyes_closed_sec:.2f}s/{config.EYES_CLOSED_HOLD_SEC:.2f}s)  Alerts:{alert_count}{occlusion_text}"
                 mar_text = f"MAR: {current_mar:.3f} ({'YAWN' if is_yawning else 'OK'})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
-                pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_drop_counter}/{head_drop_hold_frames})  HeadDrops:{head_drop_count}"
+                pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_down_sec:.2f}s/{head_drop_hold_sec:.2f}s)  HeadDrops:{head_drop_count}"
                 perclos_text = f"PERCLOS: {current_perclos:.0%} ({config.PERCLOS_WINDOW_SEC:.0f}s)  Alerts:{perclos_alert_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 

@@ -30,7 +30,7 @@ RTSP_URL = ""
 # ─────────────────────────────────────────────
 
 EAR_THRESHOLD = 0.25
-CONSEC_FRAMES = 20
+EYES_CLOSED_HOLD_SEC = 0.67   # sustained closure before a drowsiness alert
 ALERT_COOLDOWN_SEC = 4.0
 
 # Startup calibration replaces EAR_THRESHOLD with baseline_ear * EAR_THRESHOLD_RATIO,
@@ -41,7 +41,7 @@ EAR_THRESHOLD_RATIO = 0.75
 EAR_SMOOTHING_ALPHA = 0.4   # EMA factor; lower = smoother, damps blink/occlusion noise
 EAR_ASYMMETRY_MAX = 0.12   # max |left-right| EAR diff to count as "both closed" (rejects winks)
 
-NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start decaying
+NO_FACE_GRACE_SEC = 0.17   # face-loss time tolerated before counters start decaying
 
 # ─────────────────────────────────────────────
 # Yawn detection (Mouth Aspect Ratio)
@@ -60,8 +60,8 @@ YAWN_MAX_TRANSITIONS = 2
 CORNER_LIFT_MAX = 8.0   # max corner-lift angle (degrees) to count as a yawn (rejects smiles)
 OSCILLATION_WINDOW_SEC = 3.0   # seconds over which to count rising edges for oscillation
 
-# Optional smile/laugh rejection, off by default -- experimental, validate
-# against real footage before enabling.
+# Smile rejection via mouth-corner lift (see CORNER_LIFT_MAX). Enabled, but
+# experimental -- validate against real footage.
 YAWN_REQUIRE_SYMMETRIC = True
 
 # MediaPipe mouth landmarks: top inner lip, bottom inner lip, left corner, right corner
@@ -108,11 +108,11 @@ HEAD_DROP_SMOOTHING_ALPHA = 0.8   # EMA factor; damps landmark jitter
 # "Head is down" threshold, and how long it must hold to count as a real
 # drop rather than a quick glance or self-correcting nod.
 PITCH_RATIO_DOWN = 0.62
-HEAD_DROP_HOLD_FRAMES = 4
+HEAD_DROP_HOLD_SEC = 0.13
 HEAD_DROP_COOLDOWN_SEC = 1.0
 
 # ─────────────────────────────────────────────
-# Phone-use detection (YOLO ONNX)
+# Phone-use detection (YOLO NCNN)
 # ─────────────────────────────────────────────
 
 PHONE_DETECTION_ENABLED = True
@@ -127,8 +127,8 @@ PHONE_MODEL_PATH = os.path.join(
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
 PHONE_CONF_THRESHOLD = 0.7
-PHONE_CONFIRM_FRAMES = 3
-PHONE_CONFIRM_WINDOW = 5
+PHONE_CONFIRM_WINDOW_SEC = 1.0
+PHONE_CONFIRM_RATIO = 0.6   # fraction of inferences in the window that must detect
 PHONE_COOLDOWN_SEC = 5.0
 
 # YOLO on CPU is heavy; run every Nth frame to keep capture/display from lagging.
@@ -137,11 +137,15 @@ PHONE_DETECT_EVERY_N_FRAMES = 3
 # instead of all three landing on the same frame, which smooths per-frame CPU load.
 PHONE_DETECT_OFFSET = 0
 
+# Minimum inferences in a window before any YOLO detector can confirm, so a
+# single hit can't decide at low FPS. Each window must fit this many inferences.
+DETECTOR_MIN_VOTES = 3
+
 # Low-confidence tier for occluded/edge-on/calling-position views; needs a
 # longer sustained window since one low-confidence frame is unreliable.
 PHONE_LOW_CONF_THRESHOLD = 0.45
-PHONE_LOW_CONF_WINDOW = 10
-PHONE_LOW_CONF_FRAMES = 7
+PHONE_LOW_CONF_WINDOW_SEC = 2.0
+PHONE_LOW_CONF_RATIO = 0.7
 
 # ─────────────────────────────────────────────
 # Cigarette detection (YOLO classification model)
@@ -158,8 +162,8 @@ CIGARETTE_CLASS_NAME = "cigarrete"   # the other class is "nocigarette"
 CIGARETTE_IMG_SIZE = 224
 CIGARETTE_FACE_PADDING = 0.3   # padding ratio around the face box before classifying
 CIGARETTE_CONF_THRESHOLD = 0.7
-CIGARETTE_CONFIRM_FRAMES = 3
-CIGARETTE_CONFIRM_WINDOW = 5
+CIGARETTE_CONFIRM_WINDOW_SEC = 1.0
+CIGARETTE_CONFIRM_RATIO = 0.6
 CIGARETTE_COOLDOWN_SEC = 5.0
 
 # Classification is cheap relative to detection, but keep the same
@@ -186,8 +190,8 @@ SEATBELT_DETECT_OFFSET = 2
 
 # The model detects the seatbelt itself, so the violation is its ABSENCE
 # over a sustained window, not a detection -- inverse of phone/cigarette.
-SEATBELT_ABSENT_WINDOW = 30
-SEATBELT_ABSENT_FRAMES = 24
+SEATBELT_ABSENT_WINDOW_SEC = 3.0
+SEATBELT_ABSENT_RATIO = 0.8
 SEATBELT_COOLDOWN_SEC = 15.0
 
 # Grace period after startup so the driver has time to buckle up before
@@ -198,7 +202,7 @@ SEATBELT_STARTUP_GRACE_SEC = 8.0
 # Display defaults
 # ─────────────────────────────────────────────
 
-DISPLAY_ON_START = True   # off by default on headless edge devices; toggle with 'v'
+DISPLAY_ON_START = False   # headless by default on edge devices; toggle with 'v'
 
 # ─────────────────────────────────────────────
 # Camera
@@ -250,7 +254,7 @@ MODEL_DOWNLOAD_URL = (
 )
 
 # ─────────────────────────────────────────────
-# Alert / frame logging (shared by phone, drowsiness, yawn)
+# Alert / frame logging (shared by all detectors)
 # ─────────────────────────────────────────────
 
 SITE_ID = "demosite-01"
@@ -267,10 +271,10 @@ LOG_RETENTION_DAYS = 14        # delete log files older than this at startup
 # ─────────────────────────────────────────────
 # Blink visibility detection (IR-blocking sunglasses, etc.)
 # ─────────────────────────────────────────────
-NO_BLINK_TIMEOUT_SEC = 10.0  
-MAX_BLINK_FRAMES = 15  
+NO_BLINK_TIMEOUT_SEC = 10.0
+MAX_BLINK_SEC = 0.5   # longer closures are sustained closure, not a blink
 OCCLUSION_ALERT_REPEAT_SEC = 30.0
-OCCLUSION_HEAD_DROP_HOLD_FRAMES = 2
+OCCLUSION_HEAD_DROP_HOLD_SEC = 0.07
 
 # ─────────────────────────────────────────────
 # PERCLOS (rolling percentage of eye closure)

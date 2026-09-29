@@ -17,13 +17,13 @@ from collections import deque
 class BlinkVisibilityMonitor:
     """Tracks recent blink timestamps to flag when eye state can't be trusted."""
 
-    def __init__(self, no_blink_timeout_sec: float, blink_ear_threshold: float, max_blink_frames: int):
+    def __init__(self, no_blink_timeout_sec: float, blink_ear_threshold: float, max_blink_sec: float):
         self.no_blink_timeout_sec = no_blink_timeout_sec
         self.blink_ear_threshold = blink_ear_threshold
-        self.max_blink_frames = max_blink_frames  # longer closures are sustained closure, not a blink
+        self.max_blink_sec = max_blink_sec  # longer closures are sustained closure, not a blink
 
         self._blink_times = deque()
-        self._closed_run = 0
+        self._closed_since = None
         self._monitor_start = None
 
     def update(self, now: float, ear: float) -> bool:
@@ -33,11 +33,12 @@ class BlinkVisibilityMonitor:
 
         eyes_closed = ear < self.blink_ear_threshold
         if eyes_closed:
-            self._closed_run += 1
-        else:
-            if 0 < self._closed_run <= self.max_blink_frames:
+            if self._closed_since is None:
+                self._closed_since = now
+        elif self._closed_since is not None:
+            if now - self._closed_since <= self.max_blink_sec:
                 self._blink_times.append(now)  # short closure that recovered = a blink
-            self._closed_run = 0
+            self._closed_since = None
 
         while self._blink_times and now - self._blink_times[0] > self.no_blink_timeout_sec:
             self._blink_times.popleft()
@@ -48,5 +49,5 @@ class BlinkVisibilityMonitor:
     def reset(self) -> None:
         """Clear state, e.g. when the face is lost."""
         self._blink_times.clear()
-        self._closed_run = 0
+        self._closed_since = None
         self._monitor_start = None
