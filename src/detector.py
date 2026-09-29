@@ -252,6 +252,15 @@ def run() -> None:
     cigarette_detector = CigaretteDetector() if config.CIGARETTE_DETECTION_ENABLED else None
     seatbelt_detector = SeatbeltDetector() if config.SEATBELT_DETECTION_ENABLED else None
 
+    face_identifier = None
+    if getattr(config, "FACE_RECOGNITION_ENABLED", True):
+        try:
+            from .face_identifier import FaceIdentifier
+            face_identifier = FaceIdentifier(threshold=config.FACE_RECOGNITION_THRESHOLD)
+            face_identifier.load_employee_database()
+        except Exception as e:
+            print(f"[WARN] FaceIdentifier initialization skipped: {e}")
+
     if config.RTSP_URL.strip():
         print(f"[INFO] Using RTSP stream: {config.RTSP_URL.strip()}")
     else:
@@ -323,8 +332,13 @@ def run() -> None:
     smoothed_lift_angle = None
     yawn_confirmed = False
     
-    
     held_sec = 0.0
+
+    driver_status = "UNKNOWN"
+    driver_id = "UNKNOWN"
+    driver_name = "Scanning..."
+    driver_score = 0.0
+    driver_bbox = None
 
     frame_num = 0
     last_frame_id = -1
@@ -505,6 +519,14 @@ def run() -> None:
                     mar_during_hold = []
                     yawn_confirmed = False
                 
+                # ── Driver Face Recognition (MobileFaceNet INT8 + uniface SCRFD) ──
+                if face_identifier and (
+                    frame_num % config.FACE_RECOGNITION_EVERY_N_FRAMES == 0
+                    or driver_status == "UNKNOWN"
+                ):
+                    driver_status, driver_id, driver_name, driver_score, driver_bbox = (
+                        face_identifier.identify_frame(frame)
+                    )
             else:
                 no_face_streak += 1
                 # Tolerate brief tracking loss before decaying counters.
@@ -524,6 +546,11 @@ def run() -> None:
                     eyes_occluded = False
                     perclos_monitor.reset()
                     current_perclos = 0.0
+                    driver_status = "UNKNOWN"
+                    driver_id = "UNKNOWN"
+                    driver_name = "Scanning..."
+                    driver_score = 0.0
+                    driver_bbox = None
 
             now = time.time()
 
@@ -678,6 +705,21 @@ def run() -> None:
                     # seatbelt_detector.draw(frame)
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
+
+                if face_identifier:
+                    if driver_bbox:
+                        face_identifier.draw_face_box(
+                            frame,
+                            driver_bbox,
+                            driver_status,
+                            driver_id,
+                            driver_name,
+                            driver_score,
+                        )
+                    driver_color = GREEN if driver_status == "KNOWN" else ORANGE
+                    driver_text = f"Driver: {driver_id} - {driver_name} ({driver_score:.2f})"
+                    cv2.putText(frame, driver_text, (10, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.55, driver_color, 2)
+
 
                 if (w, h) != (config.DISPLAY_W, config.DISPLAY_H):
                     frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
