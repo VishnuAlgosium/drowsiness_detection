@@ -8,6 +8,7 @@ Links to the `employee` folder and `models/mobilefacenet_int8.tflite`.
 """
 
 import os
+import select
 import sys
 import time
 from typing import Optional, Tuple, Dict, List
@@ -56,6 +57,23 @@ DEFAULT_EMPLOYEE_DIR = os.path.join(
 )
 
 
+def input_with_timeout(prompt: str, timeout: float = 3.0, default: str = "n") -> str:
+    """Prompt user with a timeout (in seconds). Returns default if no input within timeout."""
+    print(prompt, end="", flush=True)
+    if sys.stdin.isatty():
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            response = sys.stdin.readline().strip()
+            print()
+            return response if response else default
+        else:
+            print(f"\n[INFO] Timeout ({timeout}s) reached. Defaulting to '{default}'.")
+            return default
+    else:
+        print(f"\n[INFO] Non-interactive session. Defaulting to '{default}'.")
+        return default
+
+
 def align_face(image: np.ndarray, landmarks: np.ndarray) -> Optional[np.ndarray]:
     """
     Align a face image to 112x112 using 5 2D landmarks.
@@ -79,6 +97,33 @@ def align_face(image: np.ndarray, landmarks: np.ndarray) -> Optional[np.ndarray]
         borderValue=0,
     )
     return aligned
+
+
+def extract_5_landmarks_from_mediapipe(landmarks, w: int, h: int) -> np.ndarray:
+    """
+    Extracts 5 2D landmarks (right eye, left eye, nose tip, left mouth corner, right mouth corner)
+    from MediaPipe face landmarks to map onto REFERENCE_LANDMARKS.
+    """
+    # 0: Person's right eye (image left, smaller X)
+    r_xs = [landmarks[i].x * w for i in [33, 160, 158, 133, 153, 144]]
+    r_ys = [landmarks[i].y * h for i in [33, 160, 158, 133, 153, 144]]
+    r_eye = [sum(r_xs) / len(r_xs), sum(r_ys) / len(r_ys)]
+
+    # 1: Person's left eye (image right, larger X)
+    l_xs = [landmarks[i].x * w for i in [362, 385, 387, 263, 373, 380]]
+    l_ys = [landmarks[i].y * h for i in [362, 385, 387, 263, 373, 380]]
+    l_eye = [sum(l_xs) / len(l_xs), sum(l_ys) / len(l_ys)]
+
+    # 2: Nose tip
+    nose = [landmarks[1].x * w, landmarks[1].y * h]
+
+    # 3: Mouth left corner (image left)
+    m_left = [landmarks[61].x * w, landmarks[61].y * h]
+
+    # 4: Mouth right corner (image right)
+    m_right = [landmarks[291].x * w, landmarks[291].y * h]
+
+    return np.array([r_eye, l_eye, nose, m_left, m_right], dtype=np.float32)
 
 
 class FaceIdentifier:
@@ -170,13 +215,70 @@ class FaceIdentifier:
 
         return embedding / norm
 
-    def load_employee_database(self) -> int:
+    def load_employee_database(self, db_path: Optional[str] = None, force_rebuild: bool = False) -> int:
+        """
+        Loads employee database. If cached DB file exists in models folder, asks user
+        with a 3-second timeout whether to update/rebuild from employee folder or load cache.
+        """
+        if db_path is None:
+            db_path = os.path.join(
+                os.path.dirname(os.path.abspath(self.model_path)), "employee_db.npz"
+            )
+
+        if os.path.exists(db_path) and not force_rebuild:
+            user_choice = input_with_timeout(
+                "[QUESTION] Found cached employee database. Do you want to update/rebuild from 'employee' folder? (y/N): ",
+                timeout=3.0,
+                default="n",
+            )
+            if user_choice.lower() != "y":
+                if self.load_from_cache(db_path):
+                    return len(self.employee_names)
+
+        # Build from employee directory and save to cache
+        count = self.build_employee_database()
+        if count > 0:
+            self.save_employee_database(db_path)
+        return count
+
+    def save_employee_database(self, db_path: str) -> None:
+        """Saves employee embeddings and metadata to an npz file in models/ directory."""
+        if self.employee_embeddings is not None and len(self.employee_embeddings) > 0:
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            np.savez_compressed(
+                db_path,
+                embeddings=self.employee_embeddings,
+                ids=np.array(self.employee_ids),
+                names=np.array(self.employee_names),
+            )
+            print(f"[INFO] Saved employee database cache to: {db_path}")
+
+    def load_from_cache(self, db_path: str) -> bool:
+        """Loads employee embeddings and metadata from npz cache file."""
+        try:
+            data = np.load(db_path)
+            self.employee_embeddings = data["embeddings"]
+            self.employee_ids = list(data["ids"])
+            self.employee_names = list(data["names"])
+            print("=" * 70)
+            print(f"[INFO] Loaded Employee Database from CACHE: {db_path}")
+            for emp_id, emp_name in zip(self.employee_ids, self.employee_names):
+                print(f"[OK] {emp_id:<8} {emp_name}")
+            print("=" * 70)
+            print(f"DATABASE READY: {len(self.employee_names)} employees loaded from cache")
+            print("=" * 70)
+            return True
+        except Exception as e:
+            print(f"[WARN] Failed to load cached employee database from {db_path}: {e}")
+            return False
+
+    def build_employee_database(self) -> int:
         """
         Builds employee database from images in self.employee_dir.
         Returns count of valid employee embeddings created.
         """
         print("=" * 70)
-        print("Building Employee Database")
+        print("Building Employee Database from images")
         print("=" * 70)
 
         if not os.path.exists(self.employee_dir):
@@ -306,6 +408,30 @@ class FaceIdentifier:
                             return status, emp_id, emp_name, score, bbox
             except Exception as e:
                 pass
+
+        return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
+
+    def identify_landmarks(
+        self, frame: np.ndarray, landmarks, w: int, h: int
+    ) -> Tuple[str, str, str, float, Optional[Tuple[int, int, int, int]]]:
+        """
+        Fast path: Uses existing MediaPipe face landmarks to align face crop
+        and perform MobileFaceNet identification, completely avoiding expensive duplicate
+        SCRFD face detection calls on CPU.
+        """
+        if self.employee_embeddings is None or len(self.employee_embeddings) == 0:
+            return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
+
+        try:
+            pts5 = extract_5_landmarks_from_mediapipe(landmarks, w, h)
+            aligned = align_face(frame, pts5)
+            if aligned is not None:
+                status, emp_id, emp_name, score = self.identify(aligned)
+                from .face_crop import padded_face_box
+                bbox = padded_face_box(landmarks, w, h, 0.1)
+                return status, emp_id, emp_name, score, bbox
+        except Exception:
+            pass
 
         return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
 

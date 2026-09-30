@@ -519,14 +519,15 @@ def run() -> None:
                     mar_during_hold = []
                     yawn_confirmed = False
                 
-                # ── Driver Face Recognition (MobileFaceNet INT8 + uniface SCRFD) ──
-                if face_identifier and (
-                    frame_num % config.FACE_RECOGNITION_EVERY_N_FRAMES == 0
-                    or driver_status == "UNKNOWN"
-                ):
-                    driver_status, driver_id, driver_name, driver_score, driver_bbox = (
-                        face_identifier.identify_frame(frame)
-                    )
+                # ── Driver Face Recognition (MobileFaceNet INT8 + MediaPipe Alignment) ──
+                if face_identifier:
+                    if frame_num % config.FACE_RECOGNITION_EVERY_N_FRAMES == 0:
+                        driver_status, driver_id, driver_name, driver_score, driver_bbox = (
+                            face_identifier.identify_landmarks(frame, landmarks, w, h)
+                        )
+                    else:
+                        x1, y1, x2, y2 = padded_face_box(landmarks, w, h, 0.1)
+                        driver_bbox = (x1, y1, x2, y2)
             else:
                 no_face_streak += 1
                 # Tolerate brief tracking loss before decaying counters.
