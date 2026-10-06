@@ -6,6 +6,7 @@ the YOLO detectors (phone, cigarette, seatbelt), display, keyboard control,
 and audio/log alerting into one shared run loop.
 """
 
+import math
 import os
 import signal
 import sys
@@ -33,7 +34,7 @@ from .cigarette import CigaretteDetector
 from .seatbelt import SeatbeltDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
-import math
+from .camera_health import open_camera_with_retry, CameraOcclusionMonitor
 
 
 _shutdown_requested = False
@@ -136,14 +137,49 @@ def _build_face_landmarker():
     return vision.FaceLandmarker.create_from_options(options), mp
 
 
-def _read_calibration_sample(grabber: FrameGrabber, last_frame_id: int, face_mesh, mp, timestamps: MonotonicTimestamp):
-    """One capture+read cycle, reused by the calibration phase below.
-    Returns (sample, frame_id) where sample is (ear, yaw, pitch, roll) or
-    None if no new frame was ready yet or no face was found."""
-    frame, frame_id, _ = grabber.read()
-    if frame is None or frame_id == last_frame_id:
-        return None, last_frame_id
+def _face_problem(landmarks, gray_flipped, w, h, left_ear, right_ear, yaw, pitch):
+    """Return None if this face is good enough to calibrate on, else a short
+    human-readable reason. Rejects faces that are cut off, too small, have an
+    eye hidden/closed, are turned away, or have part of the face covered."""
+    xs = [p.x for p in landmarks]
+    ys = [p.y for p in landmarks]
+    margin = getattr(config, "CALIB_FACE_EDGE_MARGIN", 0.02)
+    if min(xs) < margin or max(xs) > 1 - margin or min(ys) < margin or max(ys) > 1 - margin:
+        return "Face partly out of frame"
 
+    if max(xs) - min(xs) < getattr(config, "CALIB_MIN_FACE_WIDTH", 0.15):
+        return "Face too far from camera"
+
+    if min(left_ear, right_ear) < getattr(config, "CALIB_MIN_OPEN_EAR", 0.15):
+        return "Eyes closed or hidden"
+    if abs(left_ear - right_ear) > getattr(config, "CALIB_MAX_EAR_ASYMMETRY", 0.10):
+        return "One eye hidden / face partly covered"
+
+    max_angle = getattr(config, "CALIB_MAX_HEAD_ANGLE", 30.0)
+    if abs(yaw) > max_angle or abs(pitch) > max_angle:
+        return "Look straight at the road"
+
+    # Every quarter of the face must be visible (not dark, not a flat blob).
+    x1, x2 = int(min(xs) * w), int(max(xs) * w)
+    y1, y2 = int(min(ys) * h), int(max(ys) * h)
+    face = gray_flipped[max(0, y1):y2, max(0, x1):x2]
+    if face.size == 0:
+        return "No face detected"
+    fh, fw = face.shape[:2]
+    dark = getattr(config, "CAMERA_BLOCK_DARK_MEAN", 25.0)
+    min_std = getattr(config, "CALIB_FACE_MIN_STD", 8.0)
+    for qy in (0, fh // 2):
+        for qx in (0, fw // 2):
+            q = face[qy:qy + fh // 2, qx:qx + fw // 2]
+            if q.size and (q.mean() < dark or q.std() < min_std):
+                return "Face partly covered"
+    return None
+
+
+def _face_calibration_sample(frame, face_mesh, mp, timestamps: MonotonicTimestamp):
+    """Run the face landmarker on one frame.
+    Returns (sample, problem): sample is (ear, yaw, pitch, roll) when the face
+    is good, else None with `problem` saying why."""
     frame = cv2.flip(frame, 1)
     h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -151,10 +187,11 @@ def _read_calibration_sample(grabber: FrameGrabber, last_frame_id: int, face_mes
     face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
     if not face_results.face_landmarks:
-        return None, frame_id
+        return None, "No face detected"
 
     landmarks = face_results.face_landmarks[0]
-    ear = average_ear(landmarks, config.LEFT_EYE_IDX, config.RIGHT_EYE_IDX, w, h)
+    left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
+    right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
 
     yaw, pitch, roll = 0.0, 0.0, 0.0
     if face_results.facial_transformation_matrixes:
@@ -162,59 +199,171 @@ def _read_calibration_sample(grabber: FrameGrabber, last_frame_id: int, face_mes
         if pose_angles:
             yaw, pitch, roll = pose_angles
 
-    return (ear, yaw, pitch, roll), frame_id
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    problem = _face_problem(landmarks, gray, w, h, left_ear, right_ear, yaw, pitch)
+    if problem:
+        return None, problem
+
+    return ((left_ear + right_ear) / 2.0, yaw, pitch, roll), None
 
 
-def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: MonotonicTimestamp):
+def _show_calibration(ui, frame, lines, color):
+    """Draw calibration status on the live view (no-op if display is off)."""
+    if not ui["on"]:
+        return
+    view = cv2.flip(frame, 1)
+    for i, text in enumerate(lines):
+        cv2.putText(view, text, (10, 40 + i * 35), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8 if i == 0 else 0.6, color, 2)
+    if (view.shape[1], view.shape[0]) != (config.DISPLAY_W, config.DISPLAY_H):
+        view = cv2.resize(view, (config.DISPLAY_W, config.DISPLAY_H))
+    ui["display"].show(view)
+
+
+def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: MonotonicTimestamp,
+                        camera_monitor: CameraOcclusionMonitor, ui, keys):
     """
-    Sample EAR and head pose for config.EAR_CALIBRATION_FRAMES frames while
-    the driver looks at the road normally, and derive:
+    Collect config.EAR_CALIBRATION_FRAMES GOOD frames and derive:
       - a personal EAR threshold (eye shape varies per person)
-      - a yaw/pitch/roll baseline (an off-center camera mount means
-        "forward" isn't 0 degrees, so the offset needs subtracting out)
+      - a yaw/pitch/roll baseline (off-center camera mount)
 
-    Falls back to config.EAR_THRESHOLD and a zero gaze baseline if no face
-    is found, or if none shows up within the timeout.
+    A frame is only used if:
+      - the camera is not fully or partly blocked, AND
+      - a face is detected that is fully in frame, big enough, roughly
+        facing forward, both eyes open and visible, no part of it covered.
+
+    Otherwise calibration WAITS (it does not fall back to defaults), shows
+    the reason on screen/console, and plays an alert if the problem lasts
+    CALIB_PROBLEM_ALERT_SEC (repeating every CAMERA_BLOCK_ALERT_REPEAT_SEC).
+    If good frames stop for CALIB_RESET_AFTER_SEC, it restarts from 0/N so the
+    baseline always comes from one clean, continuous look.
+
+    CALIBRATION_MAX_WAIT_SEC > 0 allows a fallback to defaults after that
+    long; 0 (default) = wait until calibration succeeds.
+
+    Keys: q = quit, v = toggle display.
+    Returns (ear_threshold, yaw, pitch, roll), or None if the user quit.
     """
-    if config.EAR_CALIBRATION_FRAMES <= 0:
-        return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
+    defaults = (config.EAR_THRESHOLD, 0.0, 0.0, 0.0)
+    target = config.EAR_CALIBRATION_FRAMES
+    if target <= 0:
+        return defaults
 
-    print(f"[INFO] Calibrating baseline ({config.EAR_CALIBRATION_FRAMES} frames, "
+    repeat_sec = getattr(config, "CAMERA_BLOCK_ALERT_REPEAT_SEC", 10.0)
+    alert_after = getattr(config, "CALIB_PROBLEM_ALERT_SEC", 3.0)
+    reset_after = getattr(config, "CALIB_RESET_AFTER_SEC", 1.5)
+    max_wait = getattr(config, "CALIBRATION_MAX_WAIT_SEC", 0.0)
+    GREEN, ORANGE, RED = (0, 255, 0), (0, 165, 255), (0, 0, 255)
+
+    print(f"[INFO] Calibrating baseline ({target} frames, "
           "keep eyes open and look at the road normally)...")
 
     samples = []
     last_frame_id = -1
-    start_time = time.monotonic()
-    while len(samples) < config.EAR_CALIBRATION_FRAMES:
-        if time.monotonic() - start_time > config.EAR_CALIBRATION_TIMEOUT_SEC:
-            print("[WARN] Calibration timed out -- falling back to defaults")
-            return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
+    wait_start = time.monotonic()
+    collect_start = None
+    bad_since = None
+    last_problem = None
+    last_problem_print = -math.inf
+    last_alert = -math.inf
+    last_progress_print = 0
 
-        sample, last_frame_id = _read_calibration_sample(grabber, last_frame_id, face_mesh, mp, timestamps)
-        if sample is not None:
-            samples.append(sample)
+    while len(samples) < target:
+        if _shutdown_requested:
+            return None
+
+        key = keys.get_key()
+        if key:
+            key = key.lower()
+            if key == "q":
+                print("[INFO] Quit during calibration")
+                return None
+            if key == "v":
+                ui["on"] = not ui["on"]
+                if ui["on"]:
+                    ui["display"].start()
+                    print("[INFO] Display ON")
+                else:
+                    ui["display"].stop()
+                    print("[INFO] Display OFF")
+
+        frame, frame_id, _ = grabber.read()
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.002)
+            continue
+        last_frame_id = frame_id
+        now = time.monotonic()
+
+        if max_wait and now - wait_start > max_wait:
+            print(f"[WARN] Calibration not possible for {max_wait:.0f}s -- falling back to defaults")
+            log_alert("calibration_failed", {"last_problem": last_problem})
+            return defaults
+
+        blocked = camera_monitor.update(frame, now)
+        if blocked or camera_monitor.suspect:
+            reason = camera_monitor.reason
+            problem = ("Camera partly blocked" if reason.startswith("partially")
+                       else "Camera blocked") + f" ({reason})"
         else:
-            time.sleep(0.002)  # no new frame yet; avoid busy-spinning
+            sample, problem = _face_calibration_sample(frame, face_mesh, mp, timestamps)
 
-    if not samples:
-        print("[WARN] Calibration found no face -- falling back to defaults")
-        return config.EAR_THRESHOLD, 0.0, 0.0, 0.0
+        if problem is None:
+            if collect_start is None:
+                collect_start = now
+            samples.append(sample)
+            camera_monitor.update_reference(alpha=0.2)   # learn the clear view
+            if bad_since is not None:
+                print(f"[INFO] Face OK -- calibrating ({len(samples)}/{target})")
+            bad_since = None
+            last_problem = None
+            if len(samples) - last_progress_print >= 10 or len(samples) == target:
+                print(f"[INFO] Calibrating... {len(samples)}/{target}")
+                last_progress_print = len(samples)
+            _show_calibration(ui, frame, [f"Calibrating {len(samples)}/{target}",
+                                          "Keep eyes open, look at the road"], GREEN)
+            continue
+
+        # ── bad frame: don't use it ──
+        if bad_since is None:
+            bad_since = now
+        if problem != last_problem and now - last_problem_print > 1.0:
+            print(f"[WARN] Calibration waiting: {problem}")
+            last_problem = problem
+            last_problem_print = now
+
+        if samples and now - bad_since > reset_after:
+            print(f"[WARN] Calibration interrupted at {len(samples)}/{target} -- restarting from 0")
+            samples.clear()
+            collect_start = None
+            last_progress_print = 0
+
+        if now - bad_since >= alert_after and now - last_alert > repeat_sec:
+            print(f"[CALIBRATION ALERT] {problem} -- cannot calibrate")
+            play_occlusion_alert()
+            log_alert("calibration_blocked", {"problem": problem})
+            last_alert = now
+
+        color = RED if problem.startswith("Camera") or problem == "No face detected" else ORANGE
+        _show_calibration(ui, frame, [f"Calibrating {len(samples)}/{target} - PAUSED", problem], color)
 
     ears, yaws, pitches, rolls = zip(*samples)
 
-    baseline_ear = sum(ears) / len(ears)
-    ear_threshold = baseline_ear * config.EAR_THRESHOLD_RATIO
-    baseline_yaw = sum(yaws) / len(yaws)
-    baseline_pitch = sum(pitches) / len(pitches)
-    baseline_roll = sum(rolls) / len(rolls)
+    def _median(values):
+        s = sorted(values)
+        mid = len(s) // 2
+        return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
 
+    baseline_ear = _median(ears)
+    ear_threshold = baseline_ear * config.EAR_THRESHOLD_RATIO
+    baseline_yaw = _median(yaws)
+    baseline_pitch = _median(pitches)
+    baseline_roll = _median(rolls)
+
+    took = time.monotonic() - collect_start if collect_start is not None else 0.0
+    print(f"[INFO] Calibration complete: {len(samples)}/{target} good face frames in {took:.1f}s")
     print(f"[INFO] Baseline EAR={baseline_ear:.3f} -> drowsy threshold={ear_threshold:.3f}")
     print(f"[INFO] Baseline gaze yaw={baseline_yaw:.1f} pitch={baseline_pitch:.1f} roll={baseline_roll:.1f}")
     return ear_threshold, baseline_yaw, baseline_pitch, baseline_roll
-
-
-
-
 
 
 def compute_corner_lift_angles(landmarks, w, h):
@@ -243,10 +392,11 @@ def compute_corner_lift_angles(landmarks, w, h):
 
     # Image y grows downward, so negate dy to make "up" positive, matching
     # normal angle convention (lift = positive, droop = negative).
-    left_angle = math.degrees(math.atan2(-(ly - cy), cx - lx))    # note: left is to the LEFT of center, so dx = cx-lx (positive)
+    left_angle = math.degrees(math.atan2(-(ly - cy), cx - lx))    # left is LEFT of center, so dx = cx-lx (positive)
     right_angle = math.degrees(math.atan2(-(ry - cy), rx - cx))   # right corner: dx = rx-cx (positive)
 
     return left_angle, right_angle
+
 
 def run() -> None:
     config.apply_cpu_settings()
@@ -270,26 +420,49 @@ def run() -> None:
     else:
         print(f"[INFO] Using local webcam (index {config.CAMERA_INDEX})")
 
-    cap = _open_camera()
+    def _camera_unavailable():
+        print("[ALERT] Camera not available -- will keep retrying")
+        play_occlusion_alert()
+        log_alert("camera_unavailable", {"source": config.RTSP_URL.strip() or config.CAMERA_INDEX})
 
-    if not cap.isOpened():
-        print("[ERROR] Cannot open webcam")
+    cap = open_camera_with_retry(
+        _open_camera,
+        should_abort=lambda: _shutdown_requested,
+        on_unavailable=_camera_unavailable,
+    )
+    if cap is None:
+        print("[ERROR] Cannot open camera, exiting")
+        shutdown_audio()
         sys.exit(1)
 
     grabber = FrameGrabber(cap)
 
-    timestamps = MonotonicTimestamp()
-    ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = _calibrate_baseline(
-        grabber, face_mesh, mp, timestamps
-    )
+    # One monitor shared by calibration and the main loop, so a block that
+    # starts during calibration is still tracked once the loop begins.
+    camera_monitor = CameraOcclusionMonitor()
+    camera_block_repeat_sec = getattr(config, "CAMERA_BLOCK_ALERT_REPEAT_SEC", 10.0)
 
+    # Start the display and keyboard BEFORE calibration so progress is visible
+    # and q / v work while calibrating.
     display = LazyDisplay(config.DISPLAY_W, config.DISPLAY_H, config.CAM_FPS)
-    display_on = config.DISPLAY_ON_START
-
-    if display_on:
+    ui = {"display": display, "on": config.DISPLAY_ON_START}
+    if ui["on"]:
         display.start()
-
     keys = KeyReader()
+
+    timestamps = MonotonicTimestamp()
+    try:
+        calibration = _calibrate_baseline(grabber, face_mesh, mp, timestamps, camera_monitor, ui, keys)
+    except BaseException:
+        keys.restore(); display.stop(); grabber.release(); cap.release(); shutdown_audio()
+        raise
+    if calibration is None:
+        keys.restore(); display.stop(); grabber.release(); cap.release(); shutdown_audio()
+        print("[INFO] Exited before calibration finished")
+        return
+    ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = calibration
+    display_on = ui["on"]
+
     frame_log = FrameLogger()
 
     eyes_closed_sec = 0.0
@@ -310,11 +483,11 @@ def run() -> None:
     last_perclos_alert = -math.inf
 
     smoothed_mar = None
-    mouth_open_start = None   # wall-clock time MAR first crossed MAR_THRESHOLD, or None
+    mouth_open_start = None   # time MAR first crossed MAR_THRESHOLD, or None
     yawn_count = 0
-    last_yawn_alert = 0.0
     last_yawn_confirmed = False   # previous frame's yawn_confirmed, to count on rising edge only
     mouth_open_history = deque()
+    mar_during_hold = []
 
     gaze_away_start = None
     gaze_away_elapsed = 0.0
@@ -331,13 +504,22 @@ def run() -> None:
     smoothed_pitch_ratio = None
     is_head_down = False
     pitch_history = deque()  # (timestamp, smoothed_pitch_ratio) pairs, evicted by wall-clock age
-    
+
     last_yawn_time = -math.inf
     smoothed_lift_angle = None
     yawn_confirmed = False
-    
-    
     held_sec = 0.0
+
+    camera_blocked = camera_monitor.blocked
+    camera_block_alert_count = 0
+    last_camera_block_alert = -math.inf
+
+    # Driver face missing (camera clear, but nobody / face turned fully away)
+    no_face_alert_sec = getattr(config, "NO_FACE_ALERT_SEC", 5.0)
+    no_face_repeat_sec = getattr(config, "NO_FACE_ALERT_REPEAT_SEC", 10.0)
+    no_face_alert_count = 0
+    last_no_face_alert = -math.inf
+    face_missing_sec = 0.0
 
     frame_num = 0
     last_frame_id = -1
@@ -356,25 +538,23 @@ def run() -> None:
 
             frame, frame_id, frame_age_sec = grabber.read()
 
+            # ── Camera disconnected / stale -> keep retrying until it's back ──
             if frame_age_sec > config.CAMERA_STALE_FRAME_TIMEOUT_SEC:
                 print("[WARN] Camera frame failed, attempting reconnect")
+                log_alert("camera_disconnected", {"frame_age_sec": round(frame_age_sec, 1)})
+                play_occlusion_alert()
                 grabber.release()
                 cap.release()
 
-                reconnected = False
-                for attempt in range(1, config.CAMERA_RECONNECT_ATTEMPTS + 1):
-                    time.sleep(config.CAMERA_RECONNECT_DELAY_SEC)
-                    cap = _open_camera()
-                    if cap.isOpened():
-                        print(f"[INFO] Camera reconnected (attempt {attempt})")
-                        reconnected = True
-                        break
-
-                if not reconnected:
+                cap = open_camera_with_retry(_open_camera, should_abort=lambda: _shutdown_requested)
+                if cap is None:
                     print("[ERROR] Camera reconnect failed, exiting")
+                    cap = cv2.VideoCapture()   # dummy so finally: cap.release() is safe
                     break
 
                 grabber = FrameGrabber(cap)
+                camera_monitor.reset(keep_reference=False)
+                camera_blocked = False
                 last_frame_id = -1
                 prev_frame_time = None
                 continue
@@ -389,19 +569,50 @@ def run() -> None:
             frame_dt = now - prev_frame_time if prev_frame_time is not None else 0.0
             prev_frame_time = now
 
+            # ── Camera blocked check (runs every frame, whole session) ──
+            was_blocked = camera_blocked
+            camera_blocked = camera_monitor.update(frame, now)
+
+            if camera_blocked and not was_blocked:
+                print("[WARN] Camera blocked -- detection paused until the view is clear")
+            # Alert only while the frame really still looks blocked (not during the
+            # short "confirming clear" hold, when the view is already fine).
+            if camera_blocked and camera_monitor.suspect and now - last_camera_block_alert > camera_block_repeat_sec:
+                camera_block_alert_count += 1
+                print(f"[CAMERA BLOCKED #{camera_block_alert_count}] reason={camera_monitor.reason} "
+                      f"mean={camera_monitor.mean:.1f} std={camera_monitor.std:.1f} edges={camera_monitor.edges:.1f}")
+                play_occlusion_alert()
+                log_alert("camera_blocked", {
+                    "phase": "running",
+                    "reason": camera_monitor.reason,
+                    "mean": round(camera_monitor.mean, 1),
+                    "std": round(camera_monitor.std, 1),
+                    "edges": round(camera_monitor.edges, 1),
+                })
+                last_camera_block_alert = now
+            elif was_blocked and not camera_blocked:
+                print("[INFO] Camera view clear again -- detection resumed")
+                log_alert("camera_unblocked", {"phase": "running"})
+                last_camera_block_alert = -math.inf   # alert immediately if it gets blocked again
+
             frame_num += 1
             frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
 
             current_ear = 0.0
             current_mar = 0.0
             face_crop = None
 
-            if face_results.face_landmarks:
+            # While blocked, skip the face model entirely: a covered lens has no
+            # face, and running on it just wastes CPU.
+            face_found = False
+            if not camera_blocked:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
+                face_found = bool(face_results.face_landmarks)
+
+            if face_found:
                 landmarks = face_results.face_landmarks[0]
                 face_lost_at = None
 
@@ -472,34 +683,23 @@ def run() -> None:
                 eyes_closed = smoothed_ear < ear_threshold and eyes_agree
                 eyes_closed_sec = eyes_closed_sec + frame_dt if eyes_closed else max(0.0, eyes_closed_sec - frame_dt)
 
-                # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed --
-                # rises with frequent/long blinks, ahead of a single sustained closure.
+                # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed.
                 current_perclos = perclos_monitor.update(now, eyes_closed)
 
                 # Count mouth-open rising edges in the trailing window to catch talking/laughing/singing.
                 mouth_open = smoothed_mar > config.MAR_THRESHOLD
                 is_open_raw = current_mar > config.MAR_THRESHOLD
-                
                 mouth_open_history.append((now, is_open_raw))
-                
-                
                 while mouth_open_history and now - mouth_open_history[0][0] > config.OSCILLATION_WINDOW_SEC:
                     mouth_open_history.popleft()
-            
+
                 rising_edges = sum(
                     1 for i in range(1, len(mouth_open_history))
-                    if mouth_open_history[i][1] and not mouth_open_history[i-1][1]
+                    if mouth_open_history[i][1] and not mouth_open_history[i - 1][1]
                 )
-                
-                
-                
                 is_oscillating = rising_edges > config.YAWN_MAX_TRANSITIONS
-                
-
-
 
                 # A yawn is one continuous mouth-open stretch; oscillation restarts the hold.
-       
                 if mouth_open:
                     if mouth_open_start is None:
                         mouth_open_start = now
@@ -514,22 +714,22 @@ def run() -> None:
                     yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
 
                     if is_oscillating:
-                        # Oscillation (talking/laughing) restarts the hold timer and its samples.
                         mouth_open_start = now
                         mar_during_hold = []
                 else:
                     mouth_open_start = None
                     mar_during_hold = []
                     yawn_confirmed = False
-                
+
             else:
-                # Don't log the last seen pose as if it were current.
+                # No face (or camera blocked). Don't log the last seen pose as if it were current.
                 current_yaw_deg = current_pitch_deg = current_roll_deg = 0.0
                 current_pitch_ratio = 0.5
                 if face_lost_at is None:
                     face_lost_at = now
-                # Tolerate brief tracking loss before decaying counters.
-                if now - face_lost_at > config.NO_FACE_GRACE_SEC:
+                # Tolerate brief tracking loss before decaying counters;
+                # a blocked camera resets everything immediately.
+                if camera_blocked or now - face_lost_at > config.NO_FACE_GRACE_SEC:
                     eyes_closed_sec = max(0.0, eyes_closed_sec - frame_dt)
                     mouth_open_start = None
                     smoothed_mar = None
@@ -546,9 +746,22 @@ def run() -> None:
                     perclos_monitor.reset()
                     current_perclos = 0.0
 
+            # Keep the clear-view reference up to date (slowly) while the face is visible.
+            if face_found and not camera_monitor.suspect:
+                camera_monitor.update_reference()
+
+            # ── Driver face not detected (camera itself is clear) ──
+            if camera_blocked:
+                face_lost_at = now      # count "face missing" only from when the view is clear again
+            face_missing_sec = (now - face_lost_at) if (face_lost_at is not None and not camera_blocked) else 0.0
+            if face_missing_sec >= no_face_alert_sec and now - last_no_face_alert > no_face_repeat_sec:
+                no_face_alert_count += 1
+                print(f"[NO FACE #{no_face_alert_count}] Driver face not detected for {face_missing_sec:.1f}s")
+                play_occlusion_alert()
+                log_alert("driver_not_detected", {"missing_sec": round(face_missing_sec, 1)})
+                last_no_face_alert = now
+
             # ── Drowsiness alert (eyes) ──
-            # Skipped while eyes_occluded: EAR is unreliable, so head-drop
-            # (tightened below) becomes the primary fallback signal.
             if eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
                 alert_count += 1
                 print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f}")
@@ -557,8 +770,6 @@ def run() -> None:
                 last_alert = now
 
             # ── Eye-occlusion alert (eyes hidden from camera, e.g. sunglasses) ──
-            # Repeats periodically while occlusion persists, so a single
-            # notice early in a long drive doesn't go unnoticed.
             if eyes_occluded and now - last_occlusion_alert > config.OCCLUSION_ALERT_REPEAT_SEC:
                 occlusion_alert_count += 1
                 print(f"[OCCLUSION #{occlusion_alert_count}] Eyes hidden from camera EAR={current_ear:.3f}")
@@ -567,8 +778,6 @@ def run() -> None:
                 last_occlusion_alert = now
 
             # ── PERCLOS alert (rolling % eye closure) ──
-            # Catches fatigue building via frequent/long blinks, ahead of --
-            # and independent of -- the sustained-closure counter above.
             if current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
                 perclos_alert_count += 1
                 print(f"[PERCLOS #{perclos_alert_count}] Rolling eye closure {current_perclos:.0%}")
@@ -576,9 +785,7 @@ def run() -> None:
                 log_alert("perclos_high", {"perclos": round(current_perclos, 3)})
                 last_perclos_alert = now
 
-            # ── Yawn alert (mouth): sustained mouth-open, not a smile/talking ──
-            # yawn_confirmed is computed above, in the per-frame face-detected block.
-            # Count on rising edge only, so one long yawn doesn't retrigger every cooldown window.
+            # ── Yawn alert (rising edge only) ──
             if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_time > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
                 print(f"[YAWN #{yawn_count}] Yawn detected MAR={current_mar:.3f}")
@@ -602,8 +809,6 @@ def run() -> None:
                 last_gaze_alert = now
 
             # ── Head drop alert (sudden nod, held down) ──
-            # Shorter hold required while eyes are occluded, since head-drop
-            # is the primary fallback signal when EAR can't be trusted.
             head_drop_hold_sec = (
                 config.OCCLUSION_HEAD_DROP_HOLD_SEC if eyes_occluded else config.HEAD_DROP_HOLD_SEC
             )
@@ -617,10 +822,11 @@ def run() -> None:
                 log_alert("head_drop_detected", {"pitch_ratio": round(current_pitch_ratio, 3), "pitch_rise": round(pitch_rise, 3)})
                 last_head_drop_alert = now
 
-            # ── Phone-use alert (+ low-confidence distraction) ──
+            # ── YOLO detectors: skipped while the camera is blocked ──
+            # (a black frame would otherwise read as "no seatbelt" and fire false alerts)
             phone_detected = False
             phone_confidence = 0.0
-            if phone_detector:
+            if phone_detector and not camera_blocked:
                 phone_detected, phone_confidence, phone_alert_fired, phone_distraction_fired = phone_detector.process(frame, now)
                 if phone_alert_fired:
                     print(f"[PHONE #{phone_detector.alert_count}] Phone detected conf={phone_confidence:.3f}")
@@ -629,19 +835,17 @@ def run() -> None:
                     print(f"[DISTRACTION #{phone_detector.distraction_count}] Possible phone (low confidence) conf={phone_confidence:.3f}")
                     play_distraction_alert()
 
-            # ── Cigarette-use alert ──
             cigarette_detected = False
             cigarette_confidence = 0.0
-            if cigarette_detector:
+            if cigarette_detector and not camera_blocked:
                 cigarette_detected, cigarette_confidence, cigarette_alert_fired = cigarette_detector.process(face_crop, now)
                 if cigarette_alert_fired:
                     print(f"[CIGARETTE #{cigarette_detector.alert_count}] Cigarette detected conf={cigarette_confidence:.3f}")
                     play_cigarette_alert()
 
-            # ── Seatbelt alert (fires on sustained ABSENCE, not detection) ──
             seatbelt_present = True
             seatbelt_confidence = 0.0
-            if seatbelt_detector:
+            if seatbelt_detector and not camera_blocked:
                 seatbelt_present, seatbelt_confidence, seatbelt_alert_fired = seatbelt_detector.process(frame, now)
                 if seatbelt_alert_fired:
                     print(f"[SEATBELT #{seatbelt_detector.alert_count}] No seatbelt detected conf={seatbelt_confidence:.3f}")
@@ -650,7 +854,7 @@ def run() -> None:
             frame_elapsed = time.perf_counter() - frame_start
             current_fps = 1.0 / frame_elapsed if frame_elapsed > 0 else 0.0
             frame_log.write(
-                frame_num, bool(face_results.face_landmarks), current_ear, current_mar, phone_confidence,
+                frame_num, face_found, current_ear, current_mar, phone_confidence,
                 cigarette_confidence, seatbelt_confidence, current_perclos,
                 current_yaw_deg, current_pitch_deg, current_roll_deg, current_pitch_ratio,
                 current_fps,
@@ -685,7 +889,6 @@ def run() -> None:
                 cv2.putText(frame, fps_text, (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN, 2)
 
                 if phone_detector:
-                    # phone_detector.draw(frame)
                     phone_text = f"Phone: {phone_confidence:.2f}  Alerts:{phone_detector.alert_count}"
                     cv2.putText(frame, phone_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if phone_detected else GREEN, 2)
 
@@ -694,9 +897,18 @@ def run() -> None:
                     cv2.putText(frame, cigarette_text, (10, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if cigarette_detected else GREEN, 2)
 
                 if seatbelt_detector:
-                    # seatbelt_detector.draw(frame)
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
+
+                # Drawn last so it sits on top of everything else.
+                if camera_blocked:
+                    cv2.putText(frame, f"CAMERA BLOCKED ({camera_monitor.reason})", (10, h // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, RED, 3)
+                    cv2.putText(frame, "Detection paused - uncover the camera", (10, h // 2 + 35),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, RED, 2)
+                elif face_missing_sec >= no_face_alert_sec:
+                    cv2.putText(frame, "DRIVER FACE NOT DETECTED", (10, h // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, RED, 3)
 
                 if (w, h) != (config.DISPLAY_W, config.DISPLAY_H):
                     frame = cv2.resize(frame, (config.DISPLAY_W, config.DISPLAY_H))
@@ -745,6 +957,7 @@ def run() -> None:
         f"[INFO] Session ended. Drowsiness alerts: {alert_count}  Yawns: {yawn_count}"
         f"  Distractions: {total_distractions}  Head drops: {head_drop_count}"
         f"  Occlusion alerts: {occlusion_alert_count}  PERCLOS alerts: {perclos_alert_count}"
+        f"  Camera blocked alerts: {camera_block_alert_count}  No-face alerts: {no_face_alert_count}"
         f"{phone_summary}{cigarette_summary}{seatbelt_summary}"
     )
     print(f"[INFO] Processed {frame_num} frames in {session_elapsed:.1f}s -- avg {avg_fps:.1f} fps")

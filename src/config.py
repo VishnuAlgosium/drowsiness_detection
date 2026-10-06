@@ -282,3 +282,17 @@ OCCLUSION_HEAD_DROP_HOLD_SEC = 0.07
 PERCLOS_WINDOW_SEC = 60.0        # rolling window over which closure % is computed
 PERCLOS_ALERT_THRESHOLD = 0.40   # fraction of window closed to trigger an alert
 PERCLOS_COOLDOWN_SEC = 10.0
+
+
+# ─────────────────────────────────────────────
+# Camera-block detection (lens occlusion, IR-blocking sunglasses, etc.)
+# ─────────────────────────────────────────────
+CAMERA_BLOCK_DARK_MEAN=25.5
+CAMERA_BLOCK_MIN_STD=12.0
+CAMERA_BLOCK_MIN_LAPLACIAN_VAR=15.0
+CAMERA_PARTIAL_BLOCK_RATIO=0.25 
+CAMERA_PARTIAL_LOST_EDGE_FRAC=0.2
+CAMERA_REFERENCE_ALPHA=0.02
+CAMERA_BLOCK_HOLD_SEC=2.0
+CAMERA_BLOCK_CLEAR_SEC=1.0
+CAMERA_BLOCK_CHECK_EVERY_N_FRAMES=3
