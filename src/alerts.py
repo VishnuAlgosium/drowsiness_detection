@@ -28,6 +28,16 @@ def _json_safe(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+# Fields added to EVERY alert (e.g. who is driving), set by detector.py.
+_context: dict = {}
+
+
+def set_alert_context(**fields) -> None:
+    """Replace the fields attached to every subsequent alert (e.g. driver_id)."""
+    _context.clear()
+    _context.update({k: v for k, v in fields.items() if v is not None})
+
+
 def log_alert(event_type: str, details: dict) -> None:
     os.makedirs(config.LOG_DIR, exist_ok=True)
     log_file = os.path.join(
@@ -38,7 +48,8 @@ def log_alert(event_type: str, details: dict) -> None:
         "event_id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event_type": event_type,
-        **details,
+        **_context,
+        **details,     # event-specific fields win over context
     }
 
     with open(log_file, "a") as f:
@@ -81,7 +92,8 @@ class FrameLogger:
              "pitch_deg", "roll_deg", "pitch_ratio", "fps",
              # Drowsiness internals, appended so existing column positions don't shift.
              "smoothed_ear", "ear_threshold", "eyes_closed", "eyes_closed_sec",
-             "ear_pose_reliable", "eyes_occluded", "perclos_ready"]
+             "ear_pose_reliable", "eyes_occluded", "perclos_ready",
+             "driver_id"]
         )
         self._rows_since_flush = 0
 
@@ -91,7 +103,8 @@ class FrameLogger:
               pitch_ratio: float, fps: float, *, smoothed_ear: float = 0.0,
               ear_threshold: float = 0.0, eyes_closed: bool = False,
               eyes_closed_sec: float = 0.0, ear_pose_reliable: bool = False,
-              eyes_occluded: bool = False, perclos_ready: bool = False) -> None:
+              eyes_occluded: bool = False, perclos_ready: bool = False,
+              driver_id: str = "") -> None:
         self._writer.writerow([
             datetime.now().isoformat(),
             frame_num,
@@ -114,6 +127,7 @@ class FrameLogger:
             int(ear_pose_reliable),
             int(eyes_occluded),
             int(perclos_ready),
+            driver_id,
         ])
 
         self._rows_since_flush += 1

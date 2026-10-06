@@ -9,3 +9,22 @@ pygame==2.6.1
 ultralytics==8.4.154
 ncnn==1.0.20260526
 torch==2.14.0
+
+
+
+
+Subject: Refund not received for failed booking payment on 24 Sept 2026 – UTR [number]
+
+Dear Cleartrip Team,
+
+On 24 September 2026, I tried to book a hotel ([hotel name]) through Cleartrip and paid ₹[amount] via UPI. The amount was debited from my bank account (UTR: [number]), but no booking was confirmed.
+
+When I called customer care on 25 September, I was told the refund would arrive in 3–5 business days and that I should pay again to confirm the booking, which I did (Booking ID: [ID]). On [date], I was told the issue had been sent to your finance team and the refund would come in 1–2 days. When I called again on [date], I was given the same answer.
+
+It has now been [12] days, and I have not received the refund. Please process it immediately and share the refund reference number (ARN/RRN), or confirm in writing the date it will be credited.
+
+If this isn't resolved within 3 working days, I will escalate the complaint to the National Consumer Helpline.
+
+Regards,
+[Name]
+[Phone number registered with Cleartrip]

@@ -16,12 +16,13 @@ from collections import deque
 import cv2
 
 from . import config
-from .alerts import log_alert, FrameLogger, cleanup_old_logs
+from .alerts import log_alert, FrameLogger, cleanup_old_logs, set_alert_context
 from .audio import (
     play_alert, play_yawn_alert, play_phone_alert, play_distraction_alert,
     play_head_drop_alert, play_occlusion_alert, play_perclos_alert,
-    play_cigarette_alert, play_seatbelt_alert, shutdown_audio,
+    play_cigarette_alert, play_seatbelt_alert, shutdown_audio, play_unknown_driver_alert,
 )
+from .driver_identity import DriverIdentityTracker, DriverProfiles, UNKNOWN
 from .ear import eye_aspect_ratio, average_ear
 from .mar import mouth_aspect_ratio
 from .gaze import head_pose_angles, head_pitch_ratio
@@ -128,6 +129,28 @@ def _check_inference_stagger() -> None:
     offsets = [config.PHONE_DETECT_OFFSET, config.CIGARETTE_DETECT_OFFSET, config.SEATBELT_DETECT_OFFSET]
     if len(intervals) != 1 or len(set(offsets)) != len(offsets) or max(offsets) >= min(intervals):
         print("[WARN] YOLO *_DETECT_EVERY_N_FRAMES / *_DETECT_OFFSET overlap -- models may share frames")
+
+
+def _build_driver_identifier():
+    """FaceIdentifier with the employee database loaded, or None (recognition off).
+    Optional: any problem disables recognition with a warning instead of
+    stopping driver monitoring."""
+    if not getattr(config, "DRIVER_ID_ENABLED", False):
+        return None
+    try:
+        from .face_identifier import FaceIdentifier
+        identifier = FaceIdentifier(
+            model_path=config.DRIVER_ID_MODEL_PATH,
+            employee_dir=config.DRIVER_ID_EMPLOYEE_DIR,
+            threshold=config.DRIVER_ID_THRESHOLD,
+        )
+        if identifier.load_employee_database() == 0:
+            print("[WARN] Driver recognition: no enrolled employees -- recognition disabled")
+            return None
+        return identifier
+    except Exception as e:
+        print(f"[WARN] Driver recognition disabled: {e}")
+        return None
 
 
 def _build_face_landmarker():
@@ -427,6 +450,7 @@ def run() -> None:
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
     cigarette_detector = CigaretteDetector() if config.CIGARETTE_DETECTION_ENABLED else None
     seatbelt_detector = SeatbeltDetector() if config.SEATBELT_DETECTION_ENABLED else None
+    driver_identifier = _build_driver_identifier()
 
     if config.RTSP_URL.strip():
         print(f"[INFO] Using RTSP stream: {config.RTSP_URL.strip()}")
@@ -481,6 +505,14 @@ def run() -> None:
     display_on = ui["on"]
 
     frame_log = FrameLogger()
+
+    # ── Driver recognition state ──
+    identity = DriverIdentityTracker() if driver_identifier is not None else None
+    profiles = DriverProfiles()
+    unknown_alert_count = 0
+    last_unknown_alert = -math.inf
+    blocked_since = None
+    set_alert_context()
 
     eyes_closed_sec = 0.0
     alert_count = 0
@@ -629,6 +661,8 @@ def run() -> None:
             face_crop = None
             perclos_ready = False      # only alert on PERCLOS from frames with a face
             ear_pose_reliable = False
+            identity_events = []
+            face_bbox = None
 
             # While blocked, skip the face model entirely: a covered lens has no
             # face, and running on it just wastes CPU.
@@ -695,6 +729,8 @@ def run() -> None:
                         blink_monitor.blink_ear_threshold = ear_threshold
                         print("[INFO] Background calibration complete")
                         _print_baseline(baseline)
+                        if identity is not None and identity.phase == "confirmed":
+                            profiles.save(identity.driver_id, baseline)
                         log_alert("calibration_updated", {
                             "baseline_ear": round(baseline.ear, 3),
                             "ear_threshold": round(baseline.ear_threshold, 3),
@@ -710,6 +746,19 @@ def run() -> None:
                     abs(current_yaw_deg - gaze_baseline_yaw) <= config.EAR_POSE_YAW_MAX
                     and abs(current_pitch_deg - gaze_baseline_pitch) <= config.EAR_POSE_PITCH_MAX
                 )
+
+                # Driver recognition: only on frames that pass the calibration
+                # quality check (whole face visible, eyes open, roughly forward).
+                # The frame is mirrored, so identify_landmarks un-mirrors it to
+                # match the (unmirrored) enrolment photos.
+                if identity is not None:
+                    face_bbox = padded_face_box(landmarks, w, h, 0.1)
+                if identity is not None and not camera_monitor.suspect and identity.wants_sample(now):
+                    if _face_problem(landmarks, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), w, h,
+                                     left_ear, right_ear, current_yaw_deg, current_pitch_deg) is None:
+                        id_status, id_emp, id_name, id_score, face_bbox = driver_identifier.identify_landmarks(
+                            frame, landmarks, w, h, mirrored=True)
+                        identity_events = identity.update(now, id_status, id_emp, id_name, id_score)
 
                 looking_away = (
                     abs(current_yaw_deg - gaze_baseline_yaw) > config.YAW_ANGLE_MAX
@@ -811,6 +860,8 @@ def run() -> None:
                         eyes_closed_sec >= 0.5 * config.EYES_CLOSED_HOLD_SEC or is_head_down
                     )
                 face_lost_sec = now - face_lost_at
+                if identity is not None:
+                    identity.face_lost(face_lost_sec)
                 # Tolerate brief tracking loss before decaying counters;
                 # a blocked camera resets everything immediately.
                 if camera_blocked or now - face_lost_at > config.NO_FACE_GRACE_SEC:
@@ -849,6 +900,11 @@ def run() -> None:
             if face_found and not camera_monitor.suspect:
                 camera_monitor.update_reference()
 
+            # A long camera block can hide a driver swap just like face loss can.
+            blocked_since = (blocked_since or now) if camera_blocked else None
+            if identity is not None and blocked_since is not None:
+                identity.face_lost(now - blocked_since)
+
             # ── Driver face not detected (camera itself is clear) ──
             if camera_blocked:
                 face_lost_at = now      # count "face missing" only from when the view is clear again
@@ -859,6 +915,67 @@ def run() -> None:
                 play_occlusion_alert()
                 log_alert("driver_not_detected", {"missing_sec": round(face_missing_sec, 1)})
                 last_no_face_alert = now
+
+            # ── Driver recognition events ──
+            # Tag everything from here on (incl. these events) with the decided driver.
+            if identity is not None and identity_events:
+                set_alert_context(**identity.context())
+            for ev, info in identity_events:
+                if ev == "driver_identified":
+                    print(f"[DRIVER] Identified: {identity.label} (score {info['score']:.2f}, votes {info['votes']})")
+                    log_alert("driver_identified", info)
+                    if info["driver_id"] != UNKNOWN:
+                        if baseline.calibrated and pending_calibrator is None:
+                            profiles.save(info["driver_id"], baseline)   # startup calibration was theirs
+                        elif not baseline.calibrated and profiles.get(info["driver_id"]):
+                            ev = "apply_profile"                          # startup fell back to defaults
+                elif ev == "driver_changed":
+                    print(f"[DRIVER] Changed: {info['previous_driver_id']} -> {identity.label}")
+                    log_alert("driver_changed", info)
+                    # New person: previous driver's eye history must not carry over.
+                    perclos_monitor.reset()
+                    blink_monitor.reset()
+                    eyes_closed_sec = 0.0
+                    if config.EAR_CALIBRATION_FRAMES > 0:
+                        pending_calibrator = BaselineCalibrator(config.EAR_CALIBRATION_FRAMES)
+                    if info["driver_id"] != UNKNOWN and profiles.get(info["driver_id"]):
+                        ev = "apply_profile"
+                elif ev == "unknown_driver" and config.DRIVER_ID_ALERT_UNKNOWN:
+                    unknown_alert_count += 1
+                    print(f"[UNKNOWN DRIVER #{unknown_alert_count}] Driver is not an enrolled employee "
+                          f"(best score {info['score']:.2f})")
+                    play_unknown_driver_alert()
+                    log_alert("unknown_driver", info)
+                    last_unknown_alert = now
+
+                if ev == "apply_profile":
+                    # Known driver with a saved baseline: use it now instead of
+                    # defaults / the previous driver's; background calibration refreshes it.
+                    baseline = profiles.get(info["driver_id"])
+                    baseline_ear, ear_threshold = baseline.ear, baseline.ear_threshold
+                    gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = baseline.yaw, baseline.pitch, baseline.roll
+                    blink_monitor.blink_ear_threshold = ear_threshold
+                    print(f"[DRIVER] Loaded saved profile for {identity.label}")
+                    _print_baseline(baseline)
+                    log_alert("calibration_updated", {
+                        "source": "driver_profile",
+                        "baseline_ear": round(baseline.ear, 3),
+                        "ear_threshold": round(baseline.ear_threshold, 3),
+                        "yaw_deg": round(baseline.yaw, 1),
+                        "pitch_deg": round(baseline.pitch, 1),
+                        "roll_deg": round(baseline.roll, 1),
+                    })
+            if identity is not None:
+                set_alert_context(**identity.context())
+                # Unknown driver still at the wheel: repeat the alert periodically.
+                if (config.DRIVER_ID_ALERT_UNKNOWN and identity.driver_id == UNKNOWN
+                        and identity.phase == "confirmed" and face_found
+                        and now - last_unknown_alert > config.DRIVER_ID_UNKNOWN_REPEAT_SEC):
+                    unknown_alert_count += 1
+                    print(f"[UNKNOWN DRIVER #{unknown_alert_count}] still driving")
+                    play_unknown_driver_alert()
+                    log_alert("unknown_driver", {"repeat": True, "score": round(identity.score, 3)})
+                    last_unknown_alert = now
 
             # ── Drowsiness alert (eyes) ──
             # A current closed reading is never suppressed (blink_visibility also
@@ -1001,6 +1118,7 @@ def run() -> None:
                 ear_pose_reliable=ear_pose_reliable,
                 eyes_occluded=eyes_occluded,
                 perclos_ready=perclos_ready,
+                driver_id=(identity.driver_id or "") if identity is not None else "",
             )
 
             # ── Display ──
@@ -1045,6 +1163,16 @@ def run() -> None:
                 if seatbelt_detector:
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
+
+                if identity is not None:
+                    id_color = (GREEN if identity.driver_id not in (None, UNKNOWN)
+                                else RED if identity.driver_id == UNKNOWN else (0, 200, 255))
+                    cv2.putText(frame, f"Driver: {identity.label}", (10, 255),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, id_color, 2)
+                    if face_bbox is not None:
+                        driver_identifier.draw_face_box(
+                            frame, face_bbox, "KNOWN" if identity.driver_id not in (None, UNKNOWN) else "UNKNOWN",
+                            identity.driver_id or "", identity.driver_name, identity.score)
 
                 # Drawn last so it sits on top of everything else.
                 if camera_blocked:
@@ -1106,5 +1234,7 @@ def run() -> None:
         f"  Camera blocked alerts: {camera_block_alert_count}  No-face alerts: {no_face_alert_count}"
         f"{phone_summary}{cigarette_summary}{seatbelt_summary}"
     )
+    if identity is not None:
+        print(f"[INFO] Driver at end of session: {identity.label}  Unknown-driver alerts: {unknown_alert_count}")
     print(f"[INFO] Processed {frame_num} frames in {session_elapsed:.1f}s -- avg {avg_fps:.1f} fps")
     print(f"[INFO] Per-frame log saved to {frame_log.path}")
