@@ -1,0 +1,36 @@
+# .dockerignore – Drowsiness Detection
+# ─────────────────────────────────────────────────────────────────────────────
+# Excludes files from the Docker build context to keep the image lean and
+# avoid leaking sensitive data or large unnecessary files.
+
+# ── Git & IDE ────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.vscode
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Logs (mounted as a volume at runtime) ────────────────────────────────────
+logs/
+
+# ── Employee DB (mounted as a volume at runtime) ──────────────────────────────
+employee/
+
+# ── Test / development artefacts ─────────────────────────────────────────────
+test/
+test.jpg
+drowsiness_images/
+compare.py
+
+# ── Docker files (no need to recurse into themselves) ────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.md
+*.csv
+README.md

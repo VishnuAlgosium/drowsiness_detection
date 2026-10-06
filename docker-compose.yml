@@ -1,0 +1,84 @@
+# docker-compose.yml – Drowsiness Detection
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   USB webcam (default):
+#     docker compose up
+#
+#   RTSP camera:
+#     RTSP_URL="rtsp://user:pass@192.168.0.1:554/stream" docker compose up
+#
+#   Multi-arch build + push:
+#     docker buildx build --platform linux/amd64,linux/arm64 \
+#       -t ghcr.io/vishnualgosium/drowsiness_detection:latest --push .
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  drowsiness-detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: drowsiness-detection:latest
+
+    # ── Restart policy ────────────────────────────────────────────────────────
+    restart: unless-stopped
+
+    # ── Camera pass-through ───────────────────────────────────────────────────
+    # Expose the USB webcam device to the container.
+    # Comment out the 'devices' block if you are using RTSP only.
+    devices:
+      - /dev/video0:/dev/video0   # primary USB webcam; change index if needed
+
+    # ── X11 display forwarding ────────────────────────────────────────────────
+    # Lets the container open OpenCV windows on the host desktop.
+    # Requirements on the host before running:
+    #   xhost +local:docker
+    volumes:
+      # X11 Unix socket so OpenCV imshow can render on the host screen
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+      # PulseAudio socket for audio alerts (pygame/SDL)
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+
+      # Persistent log output (alert JSONL + frame CSVs)
+      - ./logs:/app/logs
+
+      # Employee face database (face-recognition enrolment data)
+      - ./employee:/app/employee
+
+    # ── Environment variables ─────────────────────────────────────────────────
+    environment:
+      # Set RTSP_URL to your camera URL to use an IP camera instead of USB.
+      # Leave blank (or unset) to fall back to CAMERA_INDEX=0 (USB webcam).
+      RTSP_URL: "${RTSP_URL:-}"
+
+      # Forwards the host DISPLAY variable so OpenCV can open its window.
+      DISPLAY: "${DISPLAY:-:0}"
+
+      # PulseAudio server socket path inside the container.
+      PULSE_SERVER: "unix:/run/user/1000/pulse/native"
+
+      # Optional: set PYTHONUNBUFFERED so logs stream in real-time.
+      PYTHONUNBUFFERED: "1"
+
+    # ── Networking ────────────────────────────────────────────────────────────
+    # host mode gives the container direct access to the host network, which
+    # makes RTSP streams on the LAN reachable without any extra port mapping.
+    # Switch to 'bridge' if you prefer network isolation (RTSP must then be
+    # reachable from inside the default Docker bridge subnet).
+    network_mode: host
+
+    # ── Resource limits (optional) ────────────────────────────────────────────
+    # Uncomment to cap CPU/memory usage on resource-constrained devices.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "3.0"
+    #       memory: "2g"
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

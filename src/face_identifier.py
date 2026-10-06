@@ -140,14 +140,14 @@ class FaceIdentifier:
         threshold: float = 0.50,
     ):
         if not os.path.exists(model_path):
-            fallback_model = "/home/vivek/Music/face/mobile_net/mobilefacenet_int8.tflite"
+            fallback_model = "models/mobilefacenet_int8.tflite"
             if os.path.exists(fallback_model):
                 model_path = fallback_model
             else:
                 raise FileNotFoundError(f"MobileFaceNet model not found at {model_path}")
 
         if not os.path.exists(employee_dir):
-            fallback_emp = "/home/vivek/Music/face/employee"
+            fallback_emp = "employees"
             if os.path.exists(fallback_emp):
                 employee_dir = fallback_emp
 

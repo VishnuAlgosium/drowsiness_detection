@@ -23,7 +23,9 @@ def apply_cpu_settings() -> None:
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
 # RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
-RTSP_URL = ""
+# Read from environment variable so Docker / docker-compose can inject it.
+# Falls back to empty string → USB webcam (CAMERA_INDEX) when not set.
+RTSP_URL = os.environ.get("RTSP_URL", "")
 
 # ─────────────────────────────────────────────
 # Drowsiness detection (Eye Aspect Ratio)
