@@ -38,8 +38,43 @@ ALERT_COOLDOWN_SEC = 4.0
 EAR_CALIBRATION_FRAMES = 60
 EAR_THRESHOLD_RATIO = 0.75
 
-EAR_SMOOTHING_ALPHA = 0.4   # EMA factor; lower = smoother, damps blink/occlusion noise
-EAR_ASYMMETRY_MAX = 0.12   # max |left-right| EAR diff to count as "both closed" (rejects winks)
+# Calibrated thresholds outside this range are clamped. Guards against a
+# squinting driver, or sunglasses at startup, producing a threshold so low
+# that drowsiness can never trigger (or so high that every glance does).
+EAR_THRESHOLD_MIN = 0.15
+EAR_THRESHOLD_MAX = 0.28
+
+# Time-based EMA: alpha = 1 - exp(-dt / tau), so smoothing lag is the same
+# in real seconds at 30 fps or 8 fps. 0.065 s matches the old fixed
+# alpha=0.4 at 30 fps.
+EAR_SMOOTHING_TAU_SEC = 0.065
+
+# Max |left-right| EAR difference, as a fraction of the driver's baseline EAR,
+# to count as "both closed" (rejects winks). 0.40 ~= the old absolute 0.12
+# for a typical 0.30 baseline, but scales with narrow/wide eyes.
+EAR_ASYMMETRY_RATIO = 0.40
+
+# EAR is only trusted when the head is near the calibrated forward pose.
+# Looking down at the dashboard narrows the apparent eye opening (false
+# "closed"); partial turns foreshorten one eye (real closures rejected as
+# winks). Outside these limits the closure timer and PERCLOS are held, not
+# updated -- sustained head-down is head-drop's job.
+EAR_POSE_YAW_MAX = 25.0
+EAR_POSE_PITCH_MAX = 15.0
+
+# Cap on per-frame dt fed to time accumulators, so a capture/inference stall
+# followed by one closed-eye frame can't jump a hold timer past its limit.
+MAX_FRAME_DT_SEC = 0.2
+
+# Face gone this long is treated as a possible driver change: recalibrate
+# EAR/pose baselines in the background when a face returns. 0 = never.
+RECALIBRATE_AFTER_FACE_LOSS_SEC = 60.0
+
+# If the face disappears while the driver looked drowsy (eyes closing or head
+# down), escalate after this long instead of silently decaying counters --
+# a slumped driver can drop out of frame.
+FACE_MISSING_ALERT_SEC = 3.0
+FACE_MISSING_ALERT_MAX_REPEATS = 3
 
 NO_FACE_GRACE_SEC = 0.17   # face-loss time tolerated before counters start decaying
 
@@ -279,12 +314,13 @@ OCCLUSION_HEAD_DROP_HOLD_SEC = 0.07
 # ─────────────────────────────────────────────
 # PERCLOS (rolling percentage of eye closure)
 # ─────────────────────────────────────────────
-PERCLOS_WINDOW_SEC = 60.0        # rolling window over which closure % is computed
-PERCLOS_ALERT_THRESHOLD = 0.40   # fraction of window closed to trigger an alert
+PERCLOS_WINDOW_SEC = 60.0       
+PERCLOS_ALERT_THRESHOLD = 0.40  
 PERCLOS_COOLDOWN_SEC = 10.0
+PERCLOS_MIN_COVERAGE_SEC = 30.0
+PERCLOS_RESET_AFTER_FACE_LOSS_SEC = 10.0
 
-
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # Camera-block detection (lens occlusion, IR-blocking sunglasses, etc.)
 # ─────────────────────────────────────────────
 CAMERA_BLOCK_DARK_MEAN=25.5
@@ -296,3 +332,5 @@ CAMERA_REFERENCE_ALPHA=0.02
 CAMERA_BLOCK_HOLD_SEC=2.0
 CAMERA_BLOCK_CLEAR_SEC=1.0
 CAMERA_BLOCK_CHECK_EVERY_N_FRAMES=3
+
+

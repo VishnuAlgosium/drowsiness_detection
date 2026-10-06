@@ -38,7 +38,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 MODEL_PATH = "/home/megha/Downloads/face_landmarker.task"  # <-- update if needed
 
-CAMERA_INDEX = 2
+CAMERA_INDEX = "rtsp://admin:diffuse123@192.168.0.183:554/" "cam/realmonitor?channel=1&subtype=1"
 FRAME_WIDTH = 900
 
 DOT_RADIUS_DEFAULT = 1

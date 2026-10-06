@@ -78,14 +78,20 @@ class FrameLogger:
         self._writer.writerow(
             ["timestamp", "frame_num", "face_detected", "ear", "mar", "phone_confidence",
              "cigarette_confidence", "seatbelt_confidence", "perclos", "yaw_deg",
-             "pitch_deg", "roll_deg", "pitch_ratio", "fps"]
+             "pitch_deg", "roll_deg", "pitch_ratio", "fps",
+             # Drowsiness internals, appended so existing column positions don't shift.
+             "smoothed_ear", "ear_threshold", "eyes_closed", "eyes_closed_sec",
+             "ear_pose_reliable", "eyes_occluded", "perclos_ready"]
         )
         self._rows_since_flush = 0
 
     def write(self, frame_num: int, face_detected: bool, ear: float, mar: float, phone_confidence: float,
               cigarette_confidence: float, seatbelt_confidence: float, perclos: float,
               yaw_deg: float, pitch_deg: float, roll_deg: float,
-              pitch_ratio: float, fps: float) -> None:
+              pitch_ratio: float, fps: float, *, smoothed_ear: float = 0.0,
+              ear_threshold: float = 0.0, eyes_closed: bool = False,
+              eyes_closed_sec: float = 0.0, ear_pose_reliable: bool = False,
+              eyes_occluded: bool = False, perclos_ready: bool = False) -> None:
         self._writer.writerow([
             datetime.now().isoformat(),
             frame_num,
@@ -101,6 +107,13 @@ class FrameLogger:
             f"{roll_deg:.1f}",
             f"{pitch_ratio:.3f}",
             f"{fps:.1f}",
+            f"{smoothed_ear:.3f}",
+            f"{ear_threshold:.3f}",
+            int(eyes_closed),
+            f"{eyes_closed_sec:.2f}",
+            int(ear_pose_reliable),
+            int(eyes_occluded),
+            int(perclos_ready),
         ])
 
         self._rows_since_flush += 1

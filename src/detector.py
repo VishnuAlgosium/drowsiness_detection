@@ -28,6 +28,7 @@ from .gaze import head_pose_angles, head_pitch_ratio
 from .face_crop import padded_face_box
 from .blink_visibility import BlinkVisibilityMonitor
 from .perclos import PerclosMonitor
+from .calibration import Baseline, BaselineCalibrator, default_baseline
 from .capture import FrameGrabber
 from .phone import PhoneDetector
 from .cigarette import CigaretteDetector
@@ -38,6 +39,19 @@ from .camera_health import open_camera_with_retry, CameraOcclusionMonitor
 
 
 _shutdown_requested = False
+
+
+def _ema_alpha(dt: float, tau_sec: float) -> float:
+    """Time-based EMA factor, so smoothing lag is fps-independent."""
+    if dt <= 0 or tau_sec <= 0:
+        return 1.0 if tau_sec <= 0 else 0.0
+    return 1.0 - math.exp(-dt / tau_sec)
+
+
+def _print_baseline(baseline: Baseline) -> None:
+    clamp_note = " (clamped to configured range)" if baseline.clamped else ""
+    print(f"[INFO] Baseline EAR={baseline.ear:.3f} -> drowsy threshold={baseline.ear_threshold:.3f}{clamp_note}")
+    print(f"[INFO] Baseline gaze yaw={baseline.yaw:.1f} pitch={baseline.pitch:.1f} roll={baseline.roll:.1f}")
 
 
 def _handle_sigterm(signum, frame) -> None:
@@ -242,12 +256,16 @@ def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: Monoto
     long; 0 (default) = wait until calibration succeeds.
 
     Keys: q = quit, v = toggle display.
-    Returns (ear_threshold, yaw, pitch, roll), or None if the user quit.
+    Returns (baseline, pending_calibrator), or None if the user quit.
+    baseline comes from calibration.BaselineCalibrator: medians (blinks can't
+    drag it down) and the threshold clamped to EAR_THRESHOLD_MIN..MAX.
+    pending_calibrator is None, except after a CALIBRATION_MAX_WAIT_SEC
+    fallback: then it holds the good samples so far and the main loop keeps
+    filling it from good frames, applying the result when it completes.
     """
-    defaults = (config.EAR_THRESHOLD, 0.0, 0.0, 0.0)
     target = config.EAR_CALIBRATION_FRAMES
     if target <= 0:
-        return defaults
+        return default_baseline(), None
 
     repeat_sec = getattr(config, "CAMERA_BLOCK_ALERT_REPEAT_SEC", 10.0)
     alert_after = getattr(config, "CALIB_PROBLEM_ALERT_SEC", 3.0)
@@ -258,7 +276,7 @@ def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: Monoto
     print(f"[INFO] Calibrating baseline ({target} frames, "
           "keep eyes open and look at the road normally)...")
 
-    samples = []
+    samples = []   # good (ear, yaw, pitch, roll) samples of one continuous look
     last_frame_id = -1
     wait_start = time.monotonic()
     collect_start = None
@@ -295,9 +313,13 @@ def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: Monoto
         now = time.monotonic()
 
         if max_wait and now - wait_start > max_wait:
-            print(f"[WARN] Calibration not possible for {max_wait:.0f}s -- falling back to defaults")
-            log_alert("calibration_failed", {"last_problem": last_problem})
-            return defaults
+            print(f"[WARN] Calibration not possible for {max_wait:.0f}s -- using defaults; "
+                  "will finish calibrating in the background from good frames")
+            log_alert("calibration_failed", {"last_problem": last_problem, "good_samples": len(samples)})
+            pending = BaselineCalibrator(target)
+            for sample in samples:
+                pending.add(*sample)
+            return default_baseline(), pending
 
         blocked = camera_monitor.update(frame, now)
         if blocked or camera_monitor.suspect:
@@ -346,24 +368,15 @@ def _calibrate_baseline(grabber: FrameGrabber, face_mesh, mp, timestamps: Monoto
         color = RED if problem.startswith("Camera") or problem == "No face detected" else ORANGE
         _show_calibration(ui, frame, [f"Calibrating {len(samples)}/{target} - PAUSED", problem], color)
 
-    ears, yaws, pitches, rolls = zip(*samples)
-
-    def _median(values):
-        s = sorted(values)
-        mid = len(s) // 2
-        return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
-
-    baseline_ear = _median(ears)
-    ear_threshold = baseline_ear * config.EAR_THRESHOLD_RATIO
-    baseline_yaw = _median(yaws)
-    baseline_pitch = _median(pitches)
-    baseline_roll = _median(rolls)
+    calibrator = BaselineCalibrator(len(samples))
+    for sample in samples:
+        calibrator.add(*sample)
+    baseline = calibrator.result()
 
     took = time.monotonic() - collect_start if collect_start is not None else 0.0
     print(f"[INFO] Calibration complete: {len(samples)}/{target} good face frames in {took:.1f}s")
-    print(f"[INFO] Baseline EAR={baseline_ear:.3f} -> drowsy threshold={ear_threshold:.3f}")
-    print(f"[INFO] Baseline gaze yaw={baseline_yaw:.1f} pitch={baseline_pitch:.1f} roll={baseline_roll:.1f}")
-    return ear_threshold, baseline_yaw, baseline_pitch, baseline_roll
+    _print_baseline(baseline)
+    return baseline, None
 
 
 def compute_corner_lift_angles(landmarks, w, h):
@@ -460,7 +473,11 @@ def run() -> None:
         keys.restore(); display.stop(); grabber.release(); cap.release(); shutdown_audio()
         print("[INFO] Exited before calibration finished")
         return
-    ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = calibration
+    baseline, pending_calibrator = calibration
+    baseline_ear = baseline.ear
+    ear_threshold = baseline.ear_threshold
+    gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = baseline.yaw, baseline.pitch, baseline.roll
+    recalibration_requested = False   # one background recalibration per long face-loss episode
     display_on = ui["on"]
 
     frame_log = FrameLogger()
@@ -477,8 +494,14 @@ def run() -> None:
         config.NO_BLINK_TIMEOUT_SEC, ear_threshold, config.MAX_BLINK_SEC
     )
 
-    perclos_monitor = PerclosMonitor(config.PERCLOS_WINDOW_SEC)
+    perclos_monitor = PerclosMonitor(config.PERCLOS_WINDOW_SEC, config.PERCLOS_MIN_COVERAGE_SEC)
     current_perclos = 0.0
+    perclos_ready = False
+
+    eyes_closed = False
+    ear_pose_reliable = False
+    drowsy_at_face_loss = False       # was the driver drowsy-looking when the face disappeared?
+    face_missing_alert_repeats = 0
     perclos_alert_count = 0
     last_perclos_alert = -math.inf
 
@@ -567,6 +590,8 @@ def run() -> None:
             frame_start = time.perf_counter()
             now = time.monotonic()
             frame_dt = now - prev_frame_time if prev_frame_time is not None else 0.0
+            # Cap so one stall + one closed frame can't jump a hold timer past its limit.
+            frame_dt = min(frame_dt, config.MAX_FRAME_DT_SEC)
             prev_frame_time = now
 
             # ── Camera blocked check (runs every frame, whole session) ──
@@ -602,6 +627,8 @@ def run() -> None:
             current_ear = 0.0
             current_mar = 0.0
             face_crop = None
+            perclos_ready = False      # only alert on PERCLOS from frames with a face
+            ear_pose_reliable = False
 
             # While blocked, skip the face model entirely: a covered lens has no
             # face, and running on it just wastes CPU.
@@ -615,6 +642,9 @@ def run() -> None:
             if face_found:
                 landmarks = face_results.face_landmarks[0]
                 face_lost_at = None
+                drowsy_at_face_loss = False
+                face_missing_alert_repeats = 0
+                recalibration_requested = False
 
                 left_ear = eye_aspect_ratio(landmarks, config.LEFT_EYE_IDX, w, h)
                 right_ear = eye_aspect_ratio(landmarks, config.RIGHT_EYE_IDX, w, h)
@@ -645,6 +675,42 @@ def run() -> None:
                     if pose_angles:
                         current_yaw_deg, current_pitch_deg, current_roll_deg = pose_angles
 
+                # Background calibration: startup timed out, or a long face loss
+                # suggested a driver change. Defaults stay in use until it completes.
+                # Same quality gate as startup calibration (face fully visible,
+                # eyes open, roughly forward, not covered), so a bad frame can't
+                # skew the new baseline.
+                if pending_calibrator is not None and not camera_monitor.suspect and _face_problem(
+                        landmarks, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), w, h,
+                        left_ear, right_ear, current_yaw_deg, current_pitch_deg) is None:
+                    pending_calibrator.add(current_ear, current_yaw_deg, current_pitch_deg, current_roll_deg)
+                    if pending_calibrator.done:
+                        baseline = pending_calibrator.result()
+                        pending_calibrator = None
+                        baseline_ear = baseline.ear
+                        ear_threshold = baseline.ear_threshold
+                        gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = (
+                            baseline.yaw, baseline.pitch, baseline.roll
+                        )
+                        blink_monitor.blink_ear_threshold = ear_threshold
+                        print("[INFO] Background calibration complete")
+                        _print_baseline(baseline)
+                        log_alert("calibration_updated", {
+                            "baseline_ear": round(baseline.ear, 3),
+                            "ear_threshold": round(baseline.ear_threshold, 3),
+                            "clamped": baseline.clamped,
+                            "yaw_deg": round(baseline.yaw, 1),
+                            "pitch_deg": round(baseline.pitch, 1),
+                            "roll_deg": round(baseline.roll, 1),
+                        })
+
+                # EAR is only trustworthy near the calibrated forward pose: looking
+                # down narrows the eye (false closure), turning foreshortens one eye.
+                ear_pose_reliable = (
+                    abs(current_yaw_deg - gaze_baseline_yaw) <= config.EAR_POSE_YAW_MAX
+                    and abs(current_pitch_deg - gaze_baseline_pitch) <= config.EAR_POSE_PITCH_MAX
+                )
+
                 looking_away = (
                     abs(current_yaw_deg - gaze_baseline_yaw) > config.YAW_ANGLE_MAX
                     or abs(current_pitch_deg - gaze_baseline_pitch) > config.PITCH_ANGLE_MAX
@@ -672,19 +738,29 @@ def run() -> None:
                 head_down_sec = head_down_sec + frame_dt if is_head_down else max(0.0, head_down_sec - frame_dt)
 
                 # Smooth EAR so a single noisy frame can't flip the closure timer.
-                smoothed_ear = current_ear if smoothed_ear is None else (
-                    config.EAR_SMOOTHING_ALPHA * current_ear
-                    + (1 - config.EAR_SMOOTHING_ALPHA) * smoothed_ear
-                )
+                # Time-based alpha keeps the lag constant in seconds at any fps.
+                if smoothed_ear is None:
+                    smoothed_ear = current_ear
+                else:
+                    ear_alpha = _ema_alpha(frame_dt, config.EAR_SMOOTHING_TAU_SEC)
+                    smoothed_ear = ear_alpha * current_ear + (1 - ear_alpha) * smoothed_ear
                 eyes_occluded = blink_monitor.update(now, current_ear)
 
-                # Both eyes must agree they're closed -- rejects winks/side glances.
-                eyes_agree = abs(left_ear - right_ear) < config.EAR_ASYMMETRY_MAX
+                # Both eyes must agree they're closed -- rejects winks. Relative to
+                # this driver's baseline so narrow/wide eyes get the same tolerance.
+                eyes_agree = abs(left_ear - right_ear) < config.EAR_ASYMMETRY_RATIO * baseline_ear
                 eyes_closed = smoothed_ear < ear_threshold and eyes_agree
-                eyes_closed_sec = eyes_closed_sec + frame_dt if eyes_closed else max(0.0, eyes_closed_sec - frame_dt)
 
-                # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed.
-                current_perclos = perclos_monitor.update(now, eyes_closed)
+                # Off-pose frames HOLD the timer and skip PERCLOS rather than feed
+                # them an unreliable EAR. A real nod-off is caught by head-drop.
+                if ear_pose_reliable:
+                    eyes_closed_sec = eyes_closed_sec + frame_dt if eyes_closed else max(0.0, eyes_closed_sec - frame_dt)
+                    # Rolling % of the last PERCLOS_WINDOW_SEC spent with eyes closed (time-weighted).
+                    perclos_monitor.update(now, eyes_closed, frame_dt)
+                else:
+                    perclos_monitor.evict(now)
+                current_perclos = perclos_monitor.value
+                perclos_ready = perclos_monitor.ready
 
                 # Count mouth-open rising edges in the trailing window to catch talking/laughing/singing.
                 mouth_open = smoothed_mar > config.MAR_THRESHOLD
@@ -725,12 +801,21 @@ def run() -> None:
                 # No face (or camera blocked). Don't log the last seen pose as if it were current.
                 current_yaw_deg = current_pitch_deg = current_roll_deg = 0.0
                 current_pitch_ratio = 0.5
+                eyes_closed = False
                 if face_lost_at is None:
                     face_lost_at = now
+                    # Snapshot whether the driver looked drowsy right before the face
+                    # vanished -- a slumping driver can drop out of frame entirely.
+                    # (Not when the camera got blocked: that has its own alert.)
+                    drowsy_at_face_loss = not camera_blocked and (
+                        eyes_closed_sec >= 0.5 * config.EYES_CLOSED_HOLD_SEC or is_head_down
+                    )
+                face_lost_sec = now - face_lost_at
                 # Tolerate brief tracking loss before decaying counters;
                 # a blocked camera resets everything immediately.
                 if camera_blocked or now - face_lost_at > config.NO_FACE_GRACE_SEC:
                     eyes_closed_sec = max(0.0, eyes_closed_sec - frame_dt)
+                    smoothed_ear = None
                     mouth_open_start = None
                     smoothed_mar = None
                     smoothed_lift_angle = None
@@ -743,8 +828,22 @@ def run() -> None:
                     pitch_history.clear()
                     blink_monitor.reset()
                     eyes_occluded = False
+                # Pause PERCLOS during brief face loss (old samples still age out);
+                # only clear it after a long absence.
+                perclos_monitor.evict(now)
+                if face_lost_sec > config.PERCLOS_RESET_AFTER_FACE_LOSS_SEC:
                     perclos_monitor.reset()
-                    current_perclos = 0.0
+                current_perclos = perclos_monitor.value
+                # Long absence = possible driver change: recalibrate when a face returns.
+                if (
+                    config.RECALIBRATE_AFTER_FACE_LOSS_SEC > 0
+                    and config.EAR_CALIBRATION_FRAMES > 0
+                    and face_lost_sec > config.RECALIBRATE_AFTER_FACE_LOSS_SEC
+                    and not recalibration_requested
+                ):
+                    recalibration_requested = True
+                    pending_calibrator = BaselineCalibrator(config.EAR_CALIBRATION_FRAMES)
+                    print("[INFO] Face absent for a long time -- will recalibrate when a face returns")
 
             # Keep the clear-view reference up to date (slowly) while the face is visible.
             if face_found and not camera_monitor.suspect:
@@ -762,11 +861,42 @@ def run() -> None:
                 last_no_face_alert = now
 
             # ── Drowsiness alert (eyes) ──
-            if eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
+            # A current closed reading is never suppressed (blink_visibility also
+            # enforces this): occluding lenses read as OPEN, not closed.
+            ear_suppressed = eyes_occluded and not eyes_closed
+            if eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not ear_suppressed and now - last_alert > config.ALERT_COOLDOWN_SEC:
                 alert_count += 1
-                print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f}")
+                print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f} "
+                      f"smoothed={smoothed_ear or 0.0:.3f} threshold={ear_threshold:.3f}")
                 play_alert()
-                log_alert("drowsiness_detected", {"ear": round(current_ear, 3)})
+                log_alert("drowsiness_detected", {
+                    "ear": round(current_ear, 3),
+                    "smoothed_ear": round(smoothed_ear or 0.0, 3),
+                    "ear_threshold": round(ear_threshold, 3),
+                    "eyes_closed_sec": round(eyes_closed_sec, 2),
+                    "yaw_deg": round(current_yaw_deg, 1),
+                    "pitch_deg": round(current_pitch_deg, 1),
+                })
+                last_alert = now
+
+            # ── Driver not visible after looking drowsy (slumped out of frame) ──
+            if (
+                face_lost_at is not None
+                and not camera_blocked
+                and drowsy_at_face_loss
+                and now - face_lost_at >= config.FACE_MISSING_ALERT_SEC
+                and face_missing_alert_repeats < config.FACE_MISSING_ALERT_MAX_REPEATS
+                and now - last_alert > config.ALERT_COOLDOWN_SEC
+            ):
+                face_missing_alert_repeats += 1
+                alert_count += 1
+                print(f"[ALERT #{alert_count}] Driver not visible after drowsy signs "
+                      f"({now - face_lost_at:.1f}s)")
+                play_alert()
+                log_alert("driver_not_visible", {
+                    "face_missing_sec": round(now - face_lost_at, 1),
+                    "repeat": face_missing_alert_repeats,
+                })
                 last_alert = now
 
             # ── Eye-occlusion alert (eyes hidden from camera, e.g. sunglasses) ──
@@ -778,11 +908,17 @@ def run() -> None:
                 last_occlusion_alert = now
 
             # ── PERCLOS alert (rolling % eye closure) ──
-            if current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
+            # perclos_ready requires enough window coverage, so one closed frame
+            # after startup/reset can't read as 100%.
+            if perclos_ready and current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
                 perclos_alert_count += 1
                 print(f"[PERCLOS #{perclos_alert_count}] Rolling eye closure {current_perclos:.0%}")
                 play_perclos_alert()
-                log_alert("perclos_high", {"perclos": round(current_perclos, 3)})
+                log_alert("perclos_high", {
+                    "perclos": round(current_perclos, 3),
+                    "coverage_sec": round(perclos_monitor.coverage_sec, 1),
+                    "ear_threshold": round(ear_threshold, 3),
+                })
                 last_perclos_alert = now
 
             # ── Yawn alert (rising edge only) ──
@@ -858,6 +994,13 @@ def run() -> None:
                 cigarette_confidence, seatbelt_confidence, current_perclos,
                 current_yaw_deg, current_pitch_deg, current_roll_deg, current_pitch_ratio,
                 current_fps,
+                smoothed_ear=smoothed_ear or 0.0,
+                ear_threshold=ear_threshold,
+                eyes_closed=eyes_closed,
+                eyes_closed_sec=eyes_closed_sec,
+                ear_pose_reliable=ear_pose_reliable,
+                eyes_occluded=eyes_occluded,
+                perclos_ready=perclos_ready,
             )
 
             # ── Display ──
@@ -870,15 +1013,18 @@ def run() -> None:
                 RED = (0, 0, 255)
 
                 is_distracted = gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC
-                is_perclos_high = current_perclos >= config.PERCLOS_ALERT_THRESHOLD
+                is_perclos_high = perclos_monitor.ready and current_perclos >= config.PERCLOS_ALERT_THRESHOLD
                 total_distractions = gaze_distraction_count + (phone_detector.distraction_count if phone_detector else 0)
 
                 occlusion_text = " [EYES OCCLUDED]" if eyes_occluded else ""
+                if face_results.face_landmarks and not ear_pose_reliable:
+                    occlusion_text += " [OFF-POSE]"
                 ear_text = f"EAR: {current_ear:.3f} ({eyes_closed_sec:.2f}s/{config.EYES_CLOSED_HOLD_SEC:.2f}s)  Alerts:{alert_count}{occlusion_text}"
                 mar_text = f"MAR: {current_mar:.3f} ({'YAWN' if is_yawning else 'OK'})  Yawns:{yawn_count}"
                 yaw_text = f"Yaw:{current_yaw_deg:.0f} Pitch:{current_pitch_deg:.0f} Roll:{current_roll_deg:.0f} ({gaze_away_elapsed:.1f}s/{config.DISTRACTION_HOLD_SEC:.1f}s)  Distractions:{total_distractions}"
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_down_sec:.2f}s/{head_drop_hold_sec:.2f}s)  HeadDrops:{head_drop_count}"
-                perclos_text = f"PERCLOS: {current_perclos:.0%} ({config.PERCLOS_WINDOW_SEC:.0f}s)  Alerts:{perclos_alert_count}"
+                perclos_warmup = "" if perclos_monitor.ready else " warming up"
+                perclos_text = f"PERCLOS: {current_perclos:.0%} ({config.PERCLOS_WINDOW_SEC:.0f}s{perclos_warmup})  Alerts:{perclos_alert_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
