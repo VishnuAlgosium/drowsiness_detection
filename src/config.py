@@ -22,7 +22,7 @@ def apply_cpu_settings() -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
-# RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
+# RTSP_URL = "rtsp://admin:diffuse123@192.168.0.183:554/cam/realmonitor?channel=1&subtype=1"
 RTSP_URL = ""
 
 # ─────────────────────────────────────────────
