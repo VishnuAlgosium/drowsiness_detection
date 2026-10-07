@@ -27,12 +27,9 @@ import sys
 import time
 from collections import deque
 
-# Allow running this file directly (python drowsiness_detection/test/test_jaw_open.py)
-# by putting the project root -- two levels up from this file -- on sys.path.
-# Without this, Python only adds this file's own directory to sys.path, so
-# `import drowsiness_detection...` fails with ModuleNotFoundError even though
-# the package is right there one level up.
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# Put the project root (one level up from test/) on sys.path so
+# `from src import ...` works no matter where the script is run from.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -40,9 +37,9 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
-from drowsy_detect import config
-from drowsy_detect.display import LazyDisplay
-from drowsy_detect.keyboard_input import KeyReader
+from src import config
+from src.display import LazyDisplay
+from src.keyboard_input import KeyReader
 
 import math
 
@@ -141,25 +138,6 @@ class MonotonicTimestamp:
         self._last_ms = ms
         return ms
 
-
-
-def draw_landmark_indices(frame, landmarks, indices, w, h, color=(0, 255, 0)):
-    """Draws a small dot + the numeric index at each given landmark point.
-    Useful for visually mapping index numbers to physical points on the lips."""
-    for idx in indices:
-        pt = landmarks[idx]
-        px, py = int(pt.x * w), int(pt.y * h)
-        cv2.circle(frame, (px, py), 2, color, -1)
-        cv2.putText(frame, str(idx), (px + 3, py - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
-
-def draw_all_inner_lip_points(frame, landmarks, w, h):
-    for idx in UPPER_LIP_INNER:
-        pt = landmarks[idx]
-        cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (255, 0, 0), -1)  # blue = upper
-    for idx in LOWER_LIP_INNER:
-        pt = landmarks[idx]
-        cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (0, 255, 255), -1)  # yellow = lower
 
 def build_face_landmarker(model_path: str):
     base_options = mp_python.BaseOptions(model_asset_path=model_path)
@@ -307,8 +285,8 @@ def _open_camera():
 def main():
     parser = argparse.ArgumentParser(description="MAR-only yawn detection test")
     parser.add_argument("--model", type=str,
-                         default="../models/face_landmarker.task",
-                         help="Path to MediaPipe face_landmarker .task model")
+                        default=os.path.join(_PROJECT_ROOT, "models", "face_landmarker.task"),
+                        help="Path to MediaPipe face_landmarker .task model")
     parser.add_argument("--threshold", type=float, default=0.35,
                          help="MAR above this counts as mouth-open (default 0.6; "
                               "tune against your own footage with --debug)")
@@ -432,6 +410,7 @@ def main():
                     print(f"[DEBUG] Corner lift angle -> raw_avg:{avg_lift_angle:+.1f}  smoothed:{smoothed_lift_angle:+.1f}")
                
                 is_open_now = smoothed_mar > threshold
+                print(f"[DEBUG] MAR={mar_value:.3f}  smoothed={smoothed_mar:.3f}  threshold={threshold:.2f}  is_open_now={is_open_now}")
                 is_open_raw = mar_value > threshold
                 mouth_open_history.append((now, is_open_raw))
 
@@ -462,6 +441,8 @@ def main():
                     # A smile/laugh lifts the corners toward (or above) the
                     # top lip, pushing symmetry sharply negative -- reject
                     # those even if duration alone would pass.
+                    print(f"[DEBUG] smoothed_lift_angle={smoothed_lift_angle:.1f}  "
+                          f"corner_lift_max={args.corner_lift_max:.1f}")
                     symmetry_ok = (not args.require_symmetric) or (
                         smoothed_lift_angle < args.corner_lift_max
                     )
@@ -469,7 +450,7 @@ def main():
                     mar_during_hold.append(mar_value)
                     mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < 0.5  # tune this
 
-                                        
+                  
                     yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
                     if is_oscillating:
                         # Talking-like cycling detected -- restart the hold

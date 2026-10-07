@@ -22,8 +22,8 @@ def apply_cpu_settings() -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
     os.environ["OMP_NUM_THREADS"] = OMP_NUM_THREADS
 
-# RTSP_URL = "rtsp://admin:diffuse123@192.168.0.119:554/cam/realmonitor?channel=1&subtype=1"
-RTSP_URL = ""
+RTSP_URL = "rtsp://admin:diffuse123@192.168.0.183:554/cam/realmonitor?channel=1&subtype=0"
+# RTSP_URL = ""
 
 # ─────────────────────────────────────────────
 # Drowsiness detection (Eye Aspect Ratio)
@@ -208,9 +208,9 @@ DISPLAY_ON_START = False   # headless by default on edge devices; toggle with 'v
 # Camera
 # ─────────────────────────────────────────────
 
-CAM_WIDTH = 640
-CAM_HEIGHT = 480
-CAM_FPS = 30
+CAM_WIDTH = 1920
+CAM_HEIGHT = 1080
+CAM_FPS = 25
 
 CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
 
@@ -227,8 +227,8 @@ EAR_CALIBRATION_TIMEOUT_SEC = 15.0   # hard cap so a missing/dark camera can't h
 # ffplay output window
 # ─────────────────────────────────────────────
 
-DISPLAY_W = 640
-DISPLAY_H = 480
+DISPLAY_W = 1920
+DISPLAY_H = 1080
 
 # ─────────────────────────────────────────────
 # MediaPipe eye landmark indices
@@ -296,3 +296,25 @@ CAMERA_REFERENCE_ALPHA=0.02
 CAMERA_BLOCK_HOLD_SEC=2.0
 CAMERA_BLOCK_CLEAR_SEC=1.0
 CAMERA_BLOCK_CHECK_EVERY_N_FRAMES=3
+
+
+# ────────────────────────────────────────────
+# Camera-block / calibration alert timing
+# ────────────────────────────────────────────  
+
+CAMERA_BLOCK_ALERT_REPEAT_SEC = 10.0
+CALIB_PROBLEM_ALERT_SEC = 3.0   # EMA factor; damps frame-to-frame FPS jitter   
+CALIB_RESET_AFTER_SEC = 1.5   # if the camera is blocked for this long, reset the calibration
+CALIBRATION_MAX_WAIT_SEC = 0.0   # hard cap so a missing/dark camera can't hang startup
+
+# ─────────────────────────────────────────────
+# Calibration constants (face detection / EAR baseline)
+# ───────────────────────────────────────────── 
+
+CALIB_FACE_EDGE_MARGIN = 0.02   # fraction of face box width/height to ignore when checking for edge clipping
+CALIB_MIN_FACE_WIDTH = 0.15   # fraction of frame width; smaller faces are too small to calibrate reliably
+CALIB_MIN_OPEN_EAR = 0.15   # EAR below this is considered closed during calibration
+CALIB_MAX_EAR_ASYMMETRY = 0.10   # max |left-right| EAR diff to count as "both open" (rejects winks)
+CALIB_MAX_HEAD_ANGLE = 30.0   # max |yaw/pitch/roll| to count as "looking forward" during calibration
+
+CALIB_FACE_MIN_STD = 8.0   # min stddev of face region pixel values to count as "not featureless" (rejects dark/blurred frames)

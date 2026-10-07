@@ -710,7 +710,10 @@ def run() -> None:
                     symmetry_ok = (not config.YAWN_REQUIRE_SYMMETRIC) or (smoothed_lift_angle < config.CORNER_LIFT_MAX)
                     mar_during_hold.append(current_mar)
                     mar_variance_ok = (max(mar_during_hold) - min(mar_during_hold)) < config.YAWN_MAX_MAR_VARIANCE
-
+                    print(f"[DEBUG] Yawn check: held={held_sec:.2f}s, duration_ok={duration_ok}, "
+                          f"symmetry_ok={symmetry_ok}, mar_variance_ok={mar_variance_ok}, "
+                          f"is_oscillating={is_oscillating}, smoothed_lift_angle={smoothed_lift_angle:.1f}, "
+                          f"MAR variance={max(mar_during_hold) - min(mar_during_hold):.3f}")
                     yawn_confirmed = duration_ok and symmetry_ok and mar_variance_ok and not is_oscillating
 
                     if is_oscillating:
