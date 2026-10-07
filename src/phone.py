@@ -6,20 +6,21 @@ alerting. Two confidence tiers:
 
   - High tier: clear view, fires a "phone_detected" alert.
   - Low tier: occluded/edge-on/calling-position views, needs a longer
-    sustained window and fires a "distraction_detected" alert instead,
+    time window and fires a "distraction_detected" alert instead,
     since a single low-confidence hit is as likely to be another object.
 
 Inference only runs every config.PHONE_DETECT_EVERY_N_FRAMES frames, since
 YOLO on CPU is much heavier than the MediaPipe face landmarker.
 """
 
-import cv2
-from collections import deque
+import math
 
+import cv2
 from ultralytics import YOLO
 
 from . import config
 from .alerts import log_alert
+from .vote_window import VoteWindow
 
 
 class PhoneDetector:
@@ -35,13 +36,17 @@ class PhoneDetector:
                 f"'{config.PHONE_CLASS_NAME}' not found in model classes: {self.model.names}"
             )
 
-        self.confirm_buffer = deque(maxlen=config.PHONE_CONFIRM_WINDOW)
-        self.low_conf_buffer = deque(maxlen=config.PHONE_LOW_CONF_WINDOW)
+        self.confirm_votes = VoteWindow(
+            config.PHONE_CONFIRM_WINDOW_SEC, config.PHONE_CONFIRM_RATIO, config.DETECTOR_MIN_VOTES
+        )
+        self.low_conf_votes = VoteWindow(
+            config.PHONE_LOW_CONF_WINDOW_SEC, config.PHONE_LOW_CONF_RATIO, config.DETECTOR_MIN_VOTES
+        )
 
-        self.last_alert_time = 0.0
+        self.last_alert_time = -math.inf
         self.alert_count = 0
 
-        self.last_distraction_time = 0.0
+        self.last_distraction_time = -math.inf
         self.distraction_count = 0
 
         self.frame_num = 0
@@ -73,11 +78,11 @@ class PhoneDetector:
         # Only record a sample on frames where inference actually ran, so a
         # single detection isn't counted once per skipped frame too.
         if should_run_inference:
-            self.confirm_buffer.append(phone_detected)
-            self.low_conf_buffer.append(low_conf_detected)
+            self.confirm_votes.add(now, phone_detected)
+            self.low_conf_votes.add(now, low_conf_detected)
 
         phone_alert_fired = False
-        if self._is_phone_confirmed() and (now - self.last_alert_time) > config.PHONE_COOLDOWN_SEC:
+        if self.confirm_votes.is_confirmed(now) and (now - self.last_alert_time) > config.PHONE_COOLDOWN_SEC:
             self.last_alert_time = now
             self.alert_count += 1
             phone_alert_fired = True
@@ -85,12 +90,12 @@ class PhoneDetector:
                 event_type="phone_detected",
                 details={
                     "confidence": round(confidence, 3),
-                    "frames_confirmed": f"{sum(self.confirm_buffer)}/{config.PHONE_CONFIRM_WINDOW}",
+                    "frames_confirmed": f"{self.confirm_votes.positives}/{len(self.confirm_votes)}",
                 },
             )
 
         distraction_alert_fired = False
-        if self._is_distraction_confirmed() and (now - self.last_distraction_time) > config.PHONE_COOLDOWN_SEC:
+        if self.low_conf_votes.is_confirmed(now) and (now - self.last_distraction_time) > config.PHONE_COOLDOWN_SEC:
             self.last_distraction_time = now
             self.distraction_count += 1
             distraction_alert_fired = True
@@ -99,7 +104,7 @@ class PhoneDetector:
                 details={
                     "source": "phone_low_confidence",
                     "confidence": round(confidence, 3),
-                    "frames_confirmed_low_conf": f"{sum(self.low_conf_buffer)}/{config.PHONE_LOW_CONF_WINDOW}",
+                    "frames_confirmed_low_conf": f"{self.low_conf_votes.positives}/{len(self.low_conf_votes)}",
                 },
             )
 
@@ -130,15 +135,3 @@ class PhoneDetector:
             if int(box.cls.item()) == self.phone_class_idx
         ]
         return max(confidences) if confidences else 0.0
-
-    def _is_phone_confirmed(self) -> bool:
-        return (
-            len(self.confirm_buffer) == config.PHONE_CONFIRM_WINDOW
-            and sum(self.confirm_buffer) >= config.PHONE_CONFIRM_FRAMES
-        )
-
-    def _is_distraction_confirmed(self) -> bool:
-        return (
-            len(self.low_conf_buffer) == config.PHONE_LOW_CONF_WINDOW
-            and sum(self.low_conf_buffer) >= config.PHONE_LOW_CONF_FRAMES
-        )

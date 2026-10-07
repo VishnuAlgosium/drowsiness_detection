@@ -32,7 +32,7 @@ RTSP_URL = os.environ.get("RTSP_URL", "")
 # ─────────────────────────────────────────────
 
 EAR_THRESHOLD = 0.25
-CONSEC_FRAMES = 20
+EYES_CLOSED_HOLD_SEC = 0.67   # sustained closure before a drowsiness alert
 ALERT_COOLDOWN_SEC = 4.0
 
 # Startup calibration replaces EAR_THRESHOLD with baseline_ear * EAR_THRESHOLD_RATIO,
@@ -40,10 +40,45 @@ ALERT_COOLDOWN_SEC = 4.0
 EAR_CALIBRATION_FRAMES = 60
 EAR_THRESHOLD_RATIO = 0.75
 
-EAR_SMOOTHING_ALPHA = 0.4   # EMA factor; lower = smoother, damps blink/occlusion noise
-EAR_ASYMMETRY_MAX = 0.12   # max |left-right| EAR diff to count as "both closed" (rejects winks)
+# Calibrated thresholds outside this range are clamped. Guards against a
+# squinting driver, or sunglasses at startup, producing a threshold so low
+# that drowsiness can never trigger (or so high that every glance does).
+EAR_THRESHOLD_MIN = 0.15
+EAR_THRESHOLD_MAX = 0.28
 
-NO_FACE_GRACE_FRAMES = 5   # no-face frames tolerated before counters start decaying
+# Time-based EMA: alpha = 1 - exp(-dt / tau), so smoothing lag is the same
+# in real seconds at 30 fps or 8 fps. 0.065 s matches the old fixed
+# alpha=0.4 at 30 fps.
+EAR_SMOOTHING_TAU_SEC = 0.065
+
+# Max |left-right| EAR difference, as a fraction of the driver's baseline EAR,
+# to count as "both closed" (rejects winks). 0.40 ~= the old absolute 0.12
+# for a typical 0.30 baseline, but scales with narrow/wide eyes.
+EAR_ASYMMETRY_RATIO = 0.40
+
+# EAR is only trusted when the head is near the calibrated forward pose.
+# Looking down at the dashboard narrows the apparent eye opening (false
+# "closed"); partial turns foreshorten one eye (real closures rejected as
+# winks). Outside these limits the closure timer and PERCLOS are held, not
+# updated -- sustained head-down is head-drop's job.
+EAR_POSE_YAW_MAX = 25.0
+EAR_POSE_PITCH_MAX = 15.0
+
+# Cap on per-frame dt fed to time accumulators, so a capture/inference stall
+# followed by one closed-eye frame can't jump a hold timer past its limit.
+MAX_FRAME_DT_SEC = 0.2
+
+# Face gone this long is treated as a possible driver change: recalibrate
+# EAR/pose baselines in the background when a face returns. 0 = never.
+RECALIBRATE_AFTER_FACE_LOSS_SEC = 60.0
+
+# If the face disappears while the driver looked drowsy (eyes closing or head
+# down), escalate after this long instead of silently decaying counters --
+# a slumped driver can drop out of frame.
+FACE_MISSING_ALERT_SEC = 3.0
+FACE_MISSING_ALERT_MAX_REPEATS = 3
+
+NO_FACE_GRACE_SEC = 0.17   # face-loss time tolerated before counters start decaying
 
 # ─────────────────────────────────────────────
 # Yawn detection (Mouth Aspect Ratio)
@@ -62,8 +97,8 @@ YAWN_MAX_TRANSITIONS = 2
 CORNER_LIFT_MAX = 8.0   # max corner-lift angle (degrees) to count as a yawn (rejects smiles)
 OSCILLATION_WINDOW_SEC = 3.0   # seconds over which to count rising edges for oscillation
 
-# Optional smile/laugh rejection, off by default -- experimental, validate
-# against real footage before enabling.
+# Smile rejection via mouth-corner lift (see CORNER_LIFT_MAX). Enabled, but
+# experimental -- validate against real footage.
 YAWN_REQUIRE_SYMMETRIC = True
 
 # MediaPipe mouth landmarks: top inner lip, bottom inner lip, left corner, right corner
@@ -110,11 +145,11 @@ HEAD_DROP_SMOOTHING_ALPHA = 0.8   # EMA factor; damps landmark jitter
 # "Head is down" threshold, and how long it must hold to count as a real
 # drop rather than a quick glance or self-correcting nod.
 PITCH_RATIO_DOWN = 0.62
-HEAD_DROP_HOLD_FRAMES = 4
+HEAD_DROP_HOLD_SEC = 0.13
 HEAD_DROP_COOLDOWN_SEC = 1.0
 
 # ─────────────────────────────────────────────
-# Phone-use detection (YOLO ONNX)
+# Phone-use detection (YOLO NCNN)
 # ─────────────────────────────────────────────
 
 PHONE_DETECTION_ENABLED = True
@@ -129,8 +164,8 @@ PHONE_MODEL_PATH = os.path.join(
 PHONE_CLASS_NAME = "phone"
 PHONE_IMG_SIZE = 640
 PHONE_CONF_THRESHOLD = 0.7
-PHONE_CONFIRM_FRAMES = 3
-PHONE_CONFIRM_WINDOW = 5
+PHONE_CONFIRM_WINDOW_SEC = 1.0
+PHONE_CONFIRM_RATIO = 0.6   # fraction of inferences in the window that must detect
 PHONE_COOLDOWN_SEC = 5.0
 
 # YOLO on CPU is heavy; run every Nth frame to keep capture/display from lagging.
@@ -139,11 +174,15 @@ PHONE_DETECT_EVERY_N_FRAMES = 3
 # instead of all three landing on the same frame, which smooths per-frame CPU load.
 PHONE_DETECT_OFFSET = 0
 
+# Minimum inferences in a window before any YOLO detector can confirm, so a
+# single hit can't decide at low FPS. Each window must fit this many inferences.
+DETECTOR_MIN_VOTES = 3
+
 # Low-confidence tier for occluded/edge-on/calling-position views; needs a
 # longer sustained window since one low-confidence frame is unreliable.
 PHONE_LOW_CONF_THRESHOLD = 0.45
-PHONE_LOW_CONF_WINDOW = 10
-PHONE_LOW_CONF_FRAMES = 7
+PHONE_LOW_CONF_WINDOW_SEC = 2.0
+PHONE_LOW_CONF_RATIO = 0.7
 
 # ─────────────────────────────────────────────
 # Cigarette detection (YOLO classification model)
@@ -160,8 +199,8 @@ CIGARETTE_CLASS_NAME = "cigarrete"   # the other class is "nocigarette"
 CIGARETTE_IMG_SIZE = 224
 CIGARETTE_FACE_PADDING = 0.3   # padding ratio around the face box before classifying
 CIGARETTE_CONF_THRESHOLD = 0.7
-CIGARETTE_CONFIRM_FRAMES = 3
-CIGARETTE_CONFIRM_WINDOW = 5
+CIGARETTE_CONFIRM_WINDOW_SEC = 1.0
+CIGARETTE_CONFIRM_RATIO = 0.6
 CIGARETTE_COOLDOWN_SEC = 5.0
 
 # Classification is cheap relative to detection, but keep the same
@@ -188,8 +227,8 @@ SEATBELT_DETECT_OFFSET = 2
 
 # The model detects the seatbelt itself, so the violation is its ABSENCE
 # over a sustained window, not a detection -- inverse of phone/cigarette.
-SEATBELT_ABSENT_WINDOW = 30
-SEATBELT_ABSENT_FRAMES = 24
+SEATBELT_ABSENT_WINDOW_SEC = 3.0
+SEATBELT_ABSENT_RATIO = 0.8
 SEATBELT_COOLDOWN_SEC = 15.0
 
 # Grace period after startup so the driver has time to buckle up before
@@ -200,7 +239,7 @@ SEATBELT_STARTUP_GRACE_SEC = 8.0
 # Display defaults
 # ─────────────────────────────────────────────
 
-DISPLAY_ON_START = True   # off by default on headless edge devices; toggle with 'v'
+DISPLAY_ON_START = False   # headless by default on edge devices; toggle with 'v'
 
 # ─────────────────────────────────────────────
 # Camera
@@ -252,7 +291,7 @@ MODEL_DOWNLOAD_URL = (
 )
 
 # ─────────────────────────────────────────────
-# Alert / frame logging (shared by phone, drowsiness, yawn)
+# Alert / frame logging (shared by all detectors)
 # ─────────────────────────────────────────────
 
 SITE_ID = "demosite-01"
@@ -269,21 +308,51 @@ LOG_RETENTION_DAYS = 14        # delete log files older than this at startup
 # ─────────────────────────────────────────────
 # Blink visibility detection (IR-blocking sunglasses, etc.)
 # ─────────────────────────────────────────────
-NO_BLINK_TIMEOUT_SEC = 10.0  
-MAX_BLINK_FRAMES = 15  
+NO_BLINK_TIMEOUT_SEC = 10.0
+MAX_BLINK_SEC = 0.5   # longer closures are sustained closure, not a blink
 OCCLUSION_ALERT_REPEAT_SEC = 30.0
-OCCLUSION_HEAD_DROP_HOLD_FRAMES = 2
+OCCLUSION_HEAD_DROP_HOLD_SEC = 0.07
 
 # ─────────────────────────────────────────────
 # PERCLOS (rolling percentage of eye closure)
 # ─────────────────────────────────────────────
-PERCLOS_WINDOW_SEC = 60.0        # rolling window over which closure % is computed
-PERCLOS_ALERT_THRESHOLD = 0.40   # fraction of window closed to trigger an alert
+PERCLOS_WINDOW_SEC = 60.0       
+PERCLOS_ALERT_THRESHOLD = 0.40  
 PERCLOS_COOLDOWN_SEC = 10.0
+PERCLOS_MIN_COVERAGE_SEC = 30.0
+PERCLOS_RESET_AFTER_FACE_LOSS_SEC = 10.0
+
+# ────────────────────────────────────────────
+# Camera-block detection (lens occlusion, IR-blocking sunglasses, etc.)
+# ─────────────────────────────────────────────
+CAMERA_BLOCK_DARK_MEAN=25.5
+CAMERA_BLOCK_MIN_STD=12.0
+CAMERA_BLOCK_MIN_LAPLACIAN_VAR=15.0
+CAMERA_PARTIAL_BLOCK_RATIO=0.25 
+CAMERA_PARTIAL_LOST_EDGE_FRAC=0.2
+CAMERA_REFERENCE_ALPHA=0.02
+CAMERA_BLOCK_HOLD_SEC=2.0
+CAMERA_BLOCK_CLEAR_SEC=1.0
+CAMERA_BLOCK_CHECK_EVERY_N_FRAMES=3
+
 
 # ─────────────────────────────────────────────
-# Face Recognition (MobileFaceNet INT8)
+# Driver recognition (face_identifier.py + driver_identity.py)
 # ─────────────────────────────────────────────
-FACE_RECOGNITION_ENABLED = True
-FACE_RECOGNITION_EVERY_N_FRAMES = 5   # Stagger inference every N frames for CPU load balancing
-FACE_RECOGNITION_THRESHOLD = 0.55
+DRIVER_ID_ENABLED = True
+DRIVER_ID_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "mobilefacenet_int8.tflite"
+)
+DRIVER_ID_EMPLOYEE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "employee"
+)
+DRIVER_ID_THRESHOLD = 0.50              # cosine similarity for a KNOWN match -- tune on your photos
+DRIVER_ID_VOTES = 5                     # frames sampled to decide who is driving
+DRIVER_ID_MIN_AGREEMENT = 0.6           # fraction of those that must agree (3 of 5)
+DRIVER_ID_SAMPLE_EVERY_SEC = 0.2        # sampling rate while deciding
+DRIVER_ID_REVERIFY_SEC = 30.0           # spot-check interval once decided
+DRIVER_ID_REVERIFY_MISMATCHES = 3       # consecutive disagreeing spot-checks before re-identifying
+DRIVER_ID_RESET_AFTER_FACE_LOSS_SEC = 10.0   # face gone this long -> identify again
+DRIVER_ID_ALERT_UNKNOWN = True          # sound + log when the driver isn't enrolled
+DRIVER_ID_UNKNOWN_REPEAT_SEC = 60.0     # repeat the unknown-driver alert while it persists
+DRIVER_PROFILE_PATH = os.path.join(LOG_DIR, "driver_profiles.json")   # per-driver EAR baselines

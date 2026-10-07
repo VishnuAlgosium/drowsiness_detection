@@ -5,12 +5,19 @@ Face identification module using MobileFaceNet INT8 TFLite model and
 uniface SCRFD landmark alignment, matching against employee dataset embeddings.
 
 Links to the `employee` folder and `models/mobilefacenet_int8.tflite`.
+
+Employee folder layout (both work, can be mixed):
+    employee/E01_John Smith.jpg                 one photo
+    employee/E02_Asha Rao/front.jpg, left.jpg   several photos (recommended:
+                                                3-5, incl. cab lighting / IR)
+Each photo becomes one embedding row; a match takes the best row, so extra
+photos of the same person only help.
 """
 
+import logging
 import os
 import select
 import sys
-import time
 from typing import Optional, Tuple, Dict, List
 
 import cv2
@@ -44,6 +51,15 @@ REFERENCE_LANDMARKS = np.array(
 )
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+
+log = logging.getLogger(__name__)
+_warned = set()
+
+
+def _warn_once(key: str, msg: str) -> None:
+    if key not in _warned:
+        _warned.add(key)
+        print(f"[WARN] {msg}")
 
 DEFAULT_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -140,16 +156,7 @@ class FaceIdentifier:
         threshold: float = 0.50,
     ):
         if not os.path.exists(model_path):
-            fallback_model = "models/mobilefacenet_int8.tflite"
-            if os.path.exists(fallback_model):
-                model_path = fallback_model
-            else:
-                raise FileNotFoundError(f"MobileFaceNet model not found at {model_path}")
-
-        if not os.path.exists(employee_dir):
-            fallback_emp = "employees"
-            if os.path.exists(fallback_emp):
-                employee_dir = fallback_emp
+            raise FileNotFoundError(f"MobileFaceNet model not found at {model_path}")
 
         self.model_path = model_path
         self.employee_dir = employee_dir
@@ -215,10 +222,44 @@ class FaceIdentifier:
 
         return embedding / norm
 
-    def load_employee_database(self, db_path: Optional[str] = None, force_rebuild: bool = False) -> int:
+    def _employee_files(self) -> List[Tuple[str, str]]:
+        """(path, label) for every photo: flat files use their own name as label,
+        files inside a subfolder use the subfolder name (ID_Name)."""
+        out = []
+        if not os.path.isdir(self.employee_dir):
+            return out
+        for entry in sorted(os.listdir(self.employee_dir)):
+            path = os.path.join(self.employee_dir, entry)
+            if os.path.isdir(path):
+                for f in sorted(os.listdir(path)):
+                    if f.lower().endswith(IMAGE_EXTENSIONS):
+                        out.append((os.path.join(path, f), entry))
+            elif entry.lower().endswith(IMAGE_EXTENSIONS):
+                out.append((path, os.path.splitext(entry)[0]))
+        return out
+
+    def _cache_is_stale(self, db_path: str) -> bool:
+        """Cache is stale if any employee photo is newer than it, or the set of photos changed."""
+        files = self._employee_files()
+        if not files:
+            return False          # nothing to rebuild from; use the cache
+        try:
+            data = np.load(db_path)
+            cached = set(str(x) for x in data["files"]) if "files" in data else None
+        except Exception:
+            return True
+        current = set(os.path.relpath(p, self.employee_dir) for p, _ in files)
+        if cached is not None and cached != current:
+            return True
+        newest = max(os.path.getmtime(p) for p, _ in files)
+        return newest > os.path.getmtime(db_path)
+
+    def load_employee_database(self, db_path: Optional[str] = None, force_rebuild: bool = False,
+                               prompt: bool = False) -> int:
         """
-        Loads employee database. If cached DB file exists in models folder, asks user
-        with a 3-second timeout whether to update/rebuild from employee folder or load cache.
+        Loads the employee database from the npz cache, rebuilding it automatically
+        when the employee folder has changed (new/removed/updated photos).
+        prompt=True restores the old interactive "rebuild? (y/N)" question.
         """
         if db_path is None:
             db_path = os.path.join(
@@ -226,14 +267,16 @@ class FaceIdentifier:
             )
 
         if os.path.exists(db_path) and not force_rebuild:
-            user_choice = input_with_timeout(
-                "[QUESTION] Found cached employee database. Do you want to update/rebuild from 'employee' folder? (y/N): ",
-                timeout=3.0,
-                default="n",
-            )
-            if user_choice.lower() != "y":
-                if self.load_from_cache(db_path):
-                    return len(self.employee_names)
+            rebuild = self._cache_is_stale(db_path)
+            if rebuild:
+                print("[INFO] Employee folder changed since the cache was built -- rebuilding")
+            elif prompt:
+                rebuild = input_with_timeout(
+                    "[QUESTION] Rebuild employee database from 'employee' folder? (y/N): ",
+                    timeout=3.0, default="n",
+                ).lower() == "y"
+            if not rebuild and self.load_from_cache(db_path):
+                return len(self.employee_names)
 
         # Build from employee directory and save to cache
         count = self.build_employee_database()
@@ -250,6 +293,7 @@ class FaceIdentifier:
                 embeddings=self.employee_embeddings,
                 ids=np.array(self.employee_ids),
                 names=np.array(self.employee_names),
+                files=np.array(getattr(self, "_built_files", [])),
             )
             print(f"[INFO] Saved employee database cache to: {db_path}")
 
@@ -262,10 +306,11 @@ class FaceIdentifier:
             self.employee_names = list(data["names"])
             print("=" * 70)
             print(f"[INFO] Loaded Employee Database from CACHE: {db_path}")
-            for emp_id, emp_name in zip(self.employee_ids, self.employee_names):
+            for emp_id, emp_name in sorted(set(zip(self.employee_ids, self.employee_names))):
                 print(f"[OK] {emp_id:<8} {emp_name}")
             print("=" * 70)
-            print(f"DATABASE READY: {len(self.employee_names)} employees loaded from cache")
+            print(f"DATABASE READY: {len(set(self.employee_ids))} employees "
+                  f"({len(self.employee_names)} photos) loaded from cache")
             print("=" * 70)
             return True
         except Exception as e:
@@ -274,8 +319,11 @@ class FaceIdentifier:
 
     def build_employee_database(self) -> int:
         """
-        Builds employee database from images in self.employee_dir.
-        Returns count of valid employee embeddings created.
+        Builds employee database from photos in self.employee_dir.
+        A photo is only used if SCRFD finds a face with landmarks; photos
+        without one are skipped (squashing a whole photo to 112x112 gives an
+        embedding that matches nobody reliably).
+        Returns count of valid embeddings created.
         """
         print("=" * 70)
         print("Building Employee Database from images")
@@ -284,69 +332,68 @@ class FaceIdentifier:
         if not os.path.exists(self.employee_dir):
             print(f"[ERROR] Employee directory not found: {self.employee_dir}")
             return 0
+        if self.analyzer is None:
+            print("[ERROR] uniface FaceAnalyzer unavailable -- cannot align enrolment photos. "
+                  "Install uniface, or ship a prebuilt employee_db.npz.")
+            return 0
 
-        files = sorted(
-            f for f in os.listdir(self.employee_dir)
-            if f.lower().endswith(IMAGE_EXTENSIONS)
-        )
-
+        files = self._employee_files()
         print(f"Employee images found: {len(files)}")
 
-        embeddings_list = []
-        ids_list = []
-        names_list = []
+        embeddings_list, ids_list, names_list, built_files = [], [], [], []
         failed = 0
 
-        for filename in files:
-            path = os.path.join(self.employee_dir, filename)
+        for path, label in files:
+            rel = os.path.relpath(path, self.employee_dir)
             image = cv2.imread(path)
             if image is None:
-                print(f"[ERROR] Cannot read: {filename}")
+                print(f"[ERROR] Cannot read: {rel}")
                 failed += 1
                 continue
 
             aligned = None
-            if self.analyzer is not None:
-                try:
-                    faces = self.analyzer.analyze(image)
-                    if faces:
-                        largest_face = max(
-                            faces,
-                            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-                        )
-                        if largest_face.landmarks is not None:
-                            aligned = align_face(image, largest_face.landmarks)
-                except Exception:
-                    pass
+            try:
+                faces = self.analyzer.analyze(image)
+                if faces:
+                    largest_face = max(
+                        faces,
+                        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+                    )
+                    if largest_face.landmarks is not None:
+                        aligned = align_face(image, largest_face.landmarks)
+            except Exception as e:
+                print(f"[ERROR] Face analysis failed for {rel}: {e}")
 
             if aligned is None:
-                aligned = cv2.resize(image, (112, 112))
-
-            embedding = self.get_embedding(aligned)
-            if embedding is None:
-                print(f"[EMBEDDING FAILED] {filename}")
+                print(f"[NO FACE] {rel} -- skipped (use a clear, frontal photo)")
                 failed += 1
                 continue
 
-            basename = os.path.splitext(filename)[0]
-            if "_" in basename:
-                emp_id, emp_name = basename.split("_", 1)
+            embedding = self.get_embedding(aligned)
+            if embedding is None:
+                print(f"[EMBEDDING FAILED] {rel}")
+                failed += 1
+                continue
+
+            if "_" in label:
+                emp_id, emp_name = label.split("_", 1)
             else:
-                emp_id = basename
-                emp_name = basename
+                emp_id = emp_name = label
 
             embeddings_list.append(embedding)
             ids_list.append(emp_id)
             names_list.append(emp_name)
-            print(f"[OK] {emp_id:<8} {emp_name}")
+            built_files.append(rel)
+            print(f"[OK] {emp_id:<8} {emp_name}  ({rel})")
 
         if embeddings_list:
             self.employee_embeddings = np.asarray(embeddings_list, dtype=np.float32)
             self.employee_ids = ids_list
             self.employee_names = names_list
+            self._built_files = built_files
 
         print("=" * 70)
-        print(f"DATABASE READY: {len(self.employee_names)} valid employees loaded ({failed} failed)")
+        print(f"DATABASE READY: {len(set(ids_list))} employees, {len(ids_list)} photos ({failed} failed)")
         print("=" * 70)
 
         return len(self.employee_names)
@@ -373,7 +420,7 @@ class FaceIdentifier:
         if best_score >= self.threshold:
             return "KNOWN", best_id, best_name, best_score
         else:
-            return "UNKNOWN", "UNKNOWN", "Unknown Driver", best_score
+            return "UNKNOWN", best_id, best_name, best_score
 
     def identify_frame(
         self, frame: np.ndarray
@@ -407,31 +454,42 @@ class FaceIdentifier:
                             )
                             return status, emp_id, emp_name, score, bbox
             except Exception as e:
-                pass
+                _warn_once("identify_frame", f"identify_frame failed: {e}")
 
         return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
 
     def identify_landmarks(
-        self, frame: np.ndarray, landmarks, w: int, h: int
+        self, frame: np.ndarray, landmarks, w: int, h: int, mirrored: bool = False,
     ) -> Tuple[str, str, str, float, Optional[Tuple[int, int, int, int]]]:
         """
         Fast path: Uses existing MediaPipe face landmarks to align face crop
         and perform MobileFaceNet identification, completely avoiding expensive duplicate
         SCRFD face detection calls on CPU.
+
+        mirrored=True: `frame`/`landmarks` come from a horizontally flipped image
+        (detector.py flips for a selfie-style view). Embeddings aren't mirror-
+        invariant and enrolment photos aren't mirrored, so the frame and the 5
+        points are un-mirrored first -- the crop is then made exactly like the
+        enrolment crops. The returned bbox stays in the mirrored frame's coords.
         """
         if self.employee_embeddings is None or len(self.employee_embeddings) == 0:
             return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
 
         try:
             pts5 = extract_5_landmarks_from_mediapipe(landmarks, w, h)
-            aligned = align_face(frame, pts5)
+            src = frame
+            if mirrored:
+                src = cv2.flip(frame, 1)
+                pts5[:, 0] = (w - 1) - pts5[:, 0]
+                pts5 = pts5[[1, 0, 2, 4, 3]]     # keep image-left eye / mouth corner first
+            aligned = align_face(src, pts5)
             if aligned is not None:
                 status, emp_id, emp_name, score = self.identify(aligned)
                 from .face_crop import padded_face_box
                 bbox = padded_face_box(landmarks, w, h, 0.1)
                 return status, emp_id, emp_name, score, bbox
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_once("identify_landmarks", f"identify_landmarks failed: {e}")
 
         return "UNKNOWN", "UNKNOWN", "Unknown", 0.0, None
 

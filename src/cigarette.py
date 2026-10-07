@@ -2,21 +2,22 @@
 cigarette.py
 ------------
 Cigarette-use detection via a YOLO NCNN classification model, using the
-same confirm-frames + cooldown alerting as phone.py. Unlike phone/seatbelt,
+same vote-window + cooldown alerting as phone.py. Unlike phone/seatbelt,
 this model classifies a cropped face region ("cigarette" vs "nocigarette")
 rather than detecting a box, so there's nothing to draw and no tiered
-confidence -- just one confirm buffer.
+confidence -- just one vote window.
 
 Inference only runs every config.CIGARETTE_DETECT_EVERY_N_FRAMES frames,
 same reasoning as phone.py.
 """
 
-from collections import deque
+import math
 
 from ultralytics import YOLO
 
 from . import config
 from .alerts import log_alert
+from .vote_window import VoteWindow
 
 
 class CigaretteDetector:
@@ -32,9 +33,11 @@ class CigaretteDetector:
                 f"'{config.CIGARETTE_CLASS_NAME}' not found in model classes: {self.model.names}"
             )
 
-        self.confirm_buffer = deque(maxlen=config.CIGARETTE_CONFIRM_WINDOW)
+        self.confirm_votes = VoteWindow(
+            config.CIGARETTE_CONFIRM_WINDOW_SEC, config.CIGARETTE_CONFIRM_RATIO, config.DETECTOR_MIN_VOTES
+        )
 
-        self.last_alert_time = 0.0
+        self.last_alert_time = -math.inf
         self.alert_count = 0
 
         self.frame_num = 0
@@ -70,10 +73,10 @@ class CigaretteDetector:
         cigarette_detected = self.last_confidence >= config.CIGARETTE_CONF_THRESHOLD
 
         if should_run_inference:
-            self.confirm_buffer.append(cigarette_detected)
+            self.confirm_votes.add(now, cigarette_detected)
 
         alert_fired = False
-        if self._is_confirmed() and (now - self.last_alert_time) > config.CIGARETTE_COOLDOWN_SEC:
+        if self.confirm_votes.is_confirmed(now) and (now - self.last_alert_time) > config.CIGARETTE_COOLDOWN_SEC:
             self.last_alert_time = now
             self.alert_count += 1
             alert_fired = True
@@ -81,14 +84,8 @@ class CigaretteDetector:
                 event_type="cigarette_detected",
                 details={
                     "confidence": round(self.last_confidence, 3),
-                    "frames_confirmed": f"{sum(self.confirm_buffer)}/{config.CIGARETTE_CONFIRM_WINDOW}",
+                    "frames_confirmed": f"{self.confirm_votes.positives}/{len(self.confirm_votes)}",
                 },
             )
 
         return cigarette_detected, self.last_confidence, alert_fired
-
-    def _is_confirmed(self) -> bool:
-        return (
-            len(self.confirm_buffer) == config.CIGARETTE_CONFIRM_WINDOW
-            and sum(self.confirm_buffer) >= config.CIGARETTE_CONFIRM_FRAMES
-        )
