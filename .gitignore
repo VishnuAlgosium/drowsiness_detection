@@ -6,3 +6,4 @@ logs/
 *.jpg
 *.csv
 employee
+drowsiness-detection.tar

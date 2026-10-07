@@ -511,6 +511,11 @@ def run() -> None:
     profiles = DriverProfiles()
     unknown_alert_count = 0
     last_unknown_alert = -math.inf
+    driver_status = "UNKNOWN"
+    driver_id = "UNKNOWN"
+    driver_name = "Unknown Driver"
+    driver_score = 0.0
+    face_bbox = None
     blocked_since = None
     set_alert_context()
 
@@ -751,14 +756,14 @@ def run() -> None:
                 # quality check (whole face visible, eyes open, roughly forward).
                 # The frame is mirrored, so identify_landmarks un-mirrors it to
                 # match the (unmirrored) enrolment photos.
-                if identity is not None:
+                if driver_identifier is not None:
                     face_bbox = padded_face_box(landmarks, w, h, 0.1)
-                if identity is not None and not camera_monitor.suspect and identity.wants_sample(now):
-                    if _face_problem(landmarks, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), w, h,
-                                     left_ear, right_ear, current_yaw_deg, current_pitch_deg) is None:
-                        id_status, id_emp, id_name, id_score, face_bbox = driver_identifier.identify_landmarks(
-                            frame, landmarks, w, h, mirrored=True)
-                        identity_events = identity.update(now, id_status, id_emp, id_name, id_score)
+                    if frame_num % getattr(config, "FACE_RECOGNITION_EVERY_N_FRAMES", 5) == 0:
+                        driver_status, driver_id, driver_name, driver_score, face_bbox = (
+                            driver_identifier.identify_landmarks(frame, landmarks, w, h, mirrored=True)
+                        )
+                        if identity is not None:
+                            identity_events = identity.update(now, driver_status, driver_id, driver_name, driver_score)
 
                 looking_away = (
                     abs(current_yaw_deg - gaze_baseline_yaw) > config.YAW_ANGLE_MAX
@@ -1164,15 +1169,18 @@ def run() -> None:
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
 
-                if identity is not None:
-                    id_color = (GREEN if identity.driver_id not in (None, UNKNOWN)
-                                else RED if identity.driver_id == UNKNOWN else (0, 200, 255))
-                    cv2.putText(frame, f"Driver: {identity.label}", (10, 255),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, id_color, 2)
+                if driver_identifier is not None:
+                    if driver_status == "KNOWN":
+                        driver_color = GREEN
+                        driver_text = f"Driver: {driver_id} - {driver_name} ({driver_score:.2f})"
+                    else:
+                        driver_color = RED
+                        driver_text = f"Driver: UNKNOWN ({driver_score:.2f})"
+                    cv2.putText(frame, driver_text, (10, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.55, driver_color, 2)
                     if face_bbox is not None:
                         driver_identifier.draw_face_box(
-                            frame, face_bbox, "KNOWN" if identity.driver_id not in (None, UNKNOWN) else "UNKNOWN",
-                            identity.driver_id or "", identity.driver_name, identity.score)
+                            frame, face_bbox, driver_status, driver_id, driver_name, driver_score
+                        )
 
                 # Drawn last so it sits on top of everything else.
                 if camera_blocked:

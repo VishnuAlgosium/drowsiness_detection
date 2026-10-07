@@ -375,8 +375,15 @@ class FaceIdentifier:
                 failed += 1
                 continue
 
-            if "_" in label:
+            if label.startswith("Actor_"):
+                emp_id = label
+                emp_name = label.replace("_", " ")
+            elif "_" in label and label.split("_", 1)[0].isdigit():
                 emp_id, emp_name = label.split("_", 1)
+                emp_name = emp_name.replace("_", " ")
+            elif "_" in label:
+                emp_id = label
+                emp_name = label.replace("_", " ")
             else:
                 emp_id = emp_name = label
 
@@ -420,7 +427,7 @@ class FaceIdentifier:
         if best_score >= self.threshold:
             return "KNOWN", best_id, best_name, best_score
         else:
-            return "UNKNOWN", best_id, best_name, best_score
+            return "UNKNOWN", "UNKNOWN", "Unknown Driver", best_score
 
     def identify_frame(
         self, frame: np.ndarray

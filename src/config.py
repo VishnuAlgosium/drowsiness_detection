@@ -340,19 +340,22 @@ CAMERA_BLOCK_CHECK_EVERY_N_FRAMES=3
 # Driver recognition (face_identifier.py + driver_identity.py)
 # ─────────────────────────────────────────────
 DRIVER_ID_ENABLED = True
+FACE_RECOGNITION_ENABLED = True
 DRIVER_ID_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "mobilefacenet_int8.tflite"
 )
 DRIVER_ID_EMPLOYEE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "employee"
 )
-DRIVER_ID_THRESHOLD = 0.50              # cosine similarity for a KNOWN match -- tune on your photos
-DRIVER_ID_VOTES = 5                     # frames sampled to decide who is driving
-DRIVER_ID_MIN_AGREEMENT = 0.6           # fraction of those that must agree (3 of 5)
-DRIVER_ID_SAMPLE_EVERY_SEC = 0.2        # sampling rate while deciding
-DRIVER_ID_REVERIFY_SEC = 30.0           # spot-check interval once decided
-DRIVER_ID_REVERIFY_MISMATCHES = 3       # consecutive disagreeing spot-checks before re-identifying
-DRIVER_ID_RESET_AFTER_FACE_LOSS_SEC = 10.0   # face gone this long -> identify again
-DRIVER_ID_ALERT_UNKNOWN = True          # sound + log when the driver isn't enrolled
-DRIVER_ID_UNKNOWN_REPEAT_SEC = 60.0     # repeat the unknown-driver alert while it persists
-DRIVER_PROFILE_PATH = os.path.join(LOG_DIR, "driver_profiles.json")   # per-driver EAR baselines
+DRIVER_ID_THRESHOLD = 0.53              # Cosine similarity threshold for KNOWN match
+FACE_RECOGNITION_THRESHOLD = DRIVER_ID_THRESHOLD
+FACE_RECOGNITION_EVERY_N_FRAMES = 5     # Run face recognition every N frames for real-time CPU balance
+DRIVER_ID_VOTES = 5                     # Frames sampled to decide who is driving
+DRIVER_ID_MIN_AGREEMENT = 0.6           # Fraction of those that must agree (3 of 5)
+DRIVER_ID_SAMPLE_EVERY_SEC = 0.2        # Sampling rate while deciding
+DRIVER_ID_REVERIFY_SEC = 30.0           # Spot-check interval once decided
+DRIVER_ID_REVERIFY_MISMATCHES = 3       # Consecutive disagreeing spot-checks before re-identifying
+DRIVER_ID_RESET_AFTER_FACE_LOSS_SEC = 10.0   # Face gone this long -> identify again
+DRIVER_ID_ALERT_UNKNOWN = True          # Sound + log when the driver isn't enrolled
+DRIVER_ID_UNKNOWN_REPEAT_SEC = 60.0     # Repeat the unknown-driver alert while it persists
+DRIVER_PROFILE_PATH = os.path.join(LOG_DIR, "driver_profiles.json")   # Per-driver EAR baselines
