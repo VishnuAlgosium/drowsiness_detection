@@ -373,7 +373,7 @@ class FaceIdentifier:
         if best_score >= self.threshold:
             return "KNOWN", best_id, best_name, best_score
         else:
-            return "UNKNOWN", best_id, best_name, best_score
+            return "UNKNOWN", "UNKNOWN", "Unknown Driver", best_score
 
     def identify_frame(
         self, frame: np.ndarray

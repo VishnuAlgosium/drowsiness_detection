@@ -717,8 +717,12 @@ def run() -> None:
                             driver_name,
                             driver_score,
                         )
-                    driver_color = GREEN if driver_status == "KNOWN" else ORANGE
-                    driver_text = f"Driver: {driver_id} - {driver_name} ({driver_score:.2f})"
+                    if driver_status == "KNOWN":
+                        driver_color = GREEN
+                        driver_text = f"Driver: {driver_id} - {driver_name} ({driver_score:.2f})"
+                    else:
+                        driver_color = RED
+                        driver_text = f"Driver: UNKNOWN ({driver_score:.2f})"
                     cv2.putText(frame, driver_text, (10, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.55, driver_color, 2)
 
 

@@ -210,7 +210,7 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 
-CAMERA_INDEX = 0   # cv2.VideoCapture device index, used when RTSP_URL is unset
+CAMERA_INDEX = 4# cv2.VideoCapture device index, used when RTSP_URL is unset
 
 CAMERA_RECONNECT_ATTEMPTS = 5
 CAMERA_RECONNECT_DELAY_SEC = 2.0
@@ -286,4 +286,4 @@ PERCLOS_COOLDOWN_SEC = 10.0
 # ─────────────────────────────────────────────
 FACE_RECOGNITION_ENABLED = True
 FACE_RECOGNITION_EVERY_N_FRAMES = 5   # Stagger inference every N frames for CPU load balancing
-FACE_RECOGNITION_THRESHOLD = 0.40
+FACE_RECOGNITION_THRESHOLD = 0.55
