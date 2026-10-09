@@ -4,6 +4,9 @@ detector.py
 Ties together camera capture, MediaPipe FaceLandmarker (EAR/MAR/head pose),
 the YOLO detectors (phone, cigarette, seatbelt), display, keyboard control,
 and audio/log alerting into one shared run loop.
+
+Driver monitoring runs only while the vehicle is moving: speed comes from the
+driving-management WebSocket (see vehicle_speed.py, config.DMS_MIN_SPEED_KMH).
 """
 
 import math
@@ -35,6 +38,7 @@ from .seatbelt import SeatbeltDetector
 from .display import LazyDisplay
 from .keyboard_input import KeyReader
 from .camera_health import open_camera_with_retry, CameraOcclusionMonitor
+from .vehicle_speed import VehicleSpeedClient, SpeedGate
 
 
 _shutdown_requested = False
@@ -415,6 +419,12 @@ def run() -> None:
     cigarette_detector = CigaretteDetector() if config.CIGARETTE_DETECTION_ENABLED else None
     seatbelt_detector = SeatbeltDetector() if config.SEATBELT_DETECTION_ENABLED else None
 
+    # Vehicle speed from the driving-management WebSocket. Started early so it
+    # is already connected by the time calibration finishes.
+    speed_client = VehicleSpeedClient()
+    speed_client.start()
+    speed_gate = SpeedGate(speed_client)
+
     if config.RTSP_URL.strip():
         print(f"[INFO] Using RTSP stream: {config.RTSP_URL.strip()}")
     else:
@@ -432,6 +442,7 @@ def run() -> None:
     )
     if cap is None:
         print("[ERROR] Cannot open camera, exiting")
+        speed_client.stop()
         shutdown_audio()
         sys.exit(1)
 
@@ -454,10 +465,10 @@ def run() -> None:
     try:
         calibration = _calibrate_baseline(grabber, face_mesh, mp, timestamps, camera_monitor, ui, keys)
     except BaseException:
-        keys.restore(); display.stop(); grabber.release(); cap.release(); shutdown_audio()
+        keys.restore(); display.stop(); grabber.release(); cap.release(); speed_client.stop(); shutdown_audio()
         raise
     if calibration is None:
-        keys.restore(); display.stop(); grabber.release(); cap.release(); shutdown_audio()
+        keys.restore(); display.stop(); grabber.release(); cap.release(); speed_client.stop(); shutdown_audio()
         print("[INFO] Exited before calibration finished")
         return
     ear_threshold, gaze_baseline_yaw, gaze_baseline_pitch, gaze_baseline_roll = calibration
@@ -521,6 +532,9 @@ def run() -> None:
     last_no_face_alert = -math.inf
     face_missing_sec = 0.0
 
+    # Driver monitoring runs only while the vehicle is moving (speed gate).
+    detection_active = False
+
     frame_num = 0
     last_frame_id = -1
     prev_frame_time = None
@@ -528,6 +542,9 @@ def run() -> None:
 
     print()
     print("[INFO] Running")
+    if speed_gate.enabled:
+        print(f"[INFO] Driver monitoring starts when speed > {speed_gate.min_speed:.0f} km/h "
+              f"(telemetry: {speed_client.url})")
     print("[INFO] Keys: v = toggle display, q = quit")
 
     try:
@@ -595,6 +612,23 @@ def run() -> None:
                 log_alert("camera_unblocked", {"phase": "running"})
                 last_camera_block_alert = -math.inf   # alert immediately if it gets blocked again
 
+            # ── Vehicle speed gate: monitor the driver only while moving ──
+            was_active = detection_active
+            detection_active = speed_gate.update(now)
+            if detection_active and not was_active:
+                print(f"[INFO] Driver monitoring ON ({speed_gate.status_text})")
+                log_alert("monitoring_started", {"speed_kmh": speed_gate.speed, "reason": speed_gate.reason})
+            elif was_active and not detection_active:
+                print(f"[INFO] Driver monitoring PAUSED ({speed_gate.status_text})")
+                log_alert("monitoring_paused", {"speed_kmh": speed_gate.speed, "reason": speed_gate.reason})
+                # Start clean next time, so old timers can't fire an alert the
+                # moment the vehicle moves again.
+                eyes_closed_sec = 0.0
+                head_down_sec = 0.0
+                gaze_away_start = None
+                smoothed_ear = None
+                smoothed_pitch_ratio = None
+
             frame_num += 1
             frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
@@ -603,10 +637,10 @@ def run() -> None:
             current_mar = 0.0
             face_crop = None
 
-            # While blocked, skip the face model entirely: a covered lens has no
-            # face, and running on it just wastes CPU.
+            # While blocked or parked, skip the face model entirely: a covered lens
+            # has no face, and a stopped vehicle needs no monitoring.
             face_found = False
-            if not camera_blocked:
+            if not camera_blocked and detection_active:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 face_results = face_mesh.detect_for_video(mp_image, timestamps.next())
@@ -725,14 +759,14 @@ def run() -> None:
                     yawn_confirmed = False
 
             else:
-                # No face (or camera blocked). Don't log the last seen pose as if it were current.
+                # No face (or camera blocked, or vehicle stopped). Don't log the last seen pose as if it were current.
                 current_yaw_deg = current_pitch_deg = current_roll_deg = 0.0
                 current_pitch_ratio = 0.5
                 if face_lost_at is None:
                     face_lost_at = now
                 # Tolerate brief tracking loss before decaying counters;
-                # a blocked camera resets everything immediately.
-                if camera_blocked or now - face_lost_at > config.NO_FACE_GRACE_SEC:
+                # a blocked camera or a stopped vehicle resets everything immediately.
+                if camera_blocked or not detection_active or now - face_lost_at > config.NO_FACE_GRACE_SEC:
                     eyes_closed_sec = max(0.0, eyes_closed_sec - frame_dt)
                     mouth_open_start = None
                     smoothed_mar = None
@@ -753,9 +787,9 @@ def run() -> None:
             if face_found and not camera_monitor.suspect:
                 camera_monitor.update_reference()
 
-            # ── Driver face not detected (camera itself is clear) ──
-            if camera_blocked:
-                face_lost_at = now      # count "face missing" only from when the view is clear again
+            # ── Driver face not detected (camera itself is clear, vehicle moving) ──
+            if camera_blocked or not detection_active:
+                face_lost_at = now      # count "face missing" only while the view is clear and the vehicle moves
             face_missing_sec = (now - face_lost_at) if (face_lost_at is not None and not camera_blocked) else 0.0
             if face_missing_sec >= no_face_alert_sec and now - last_no_face_alert > no_face_repeat_sec:
                 no_face_alert_count += 1
@@ -765,41 +799,41 @@ def run() -> None:
                 last_no_face_alert = now
 
             # ── Drowsiness alert (eyes) ──
-            if eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
+            if detection_active and eyes_closed_sec >= config.EYES_CLOSED_HOLD_SEC and not eyes_occluded and now - last_alert > config.ALERT_COOLDOWN_SEC:
                 alert_count += 1
                 print(f"[ALERT #{alert_count}] Drowsiness detected EAR={current_ear:.3f}")
                 play_alert()
-                log_alert("drowsiness_detected", {"ear": round(current_ear, 3)})
+                log_alert("drowsiness_detected", {"ear": round(current_ear, 3), "speed_kmh": speed_gate.speed})
                 last_alert = now
 
             # ── Eye-occlusion alert (eyes hidden from camera, e.g. sunglasses) ──
-            if eyes_occluded and now - last_occlusion_alert > config.OCCLUSION_ALERT_REPEAT_SEC:
+            if detection_active and eyes_occluded and now - last_occlusion_alert > config.OCCLUSION_ALERT_REPEAT_SEC:
                 occlusion_alert_count += 1
                 print(f"[OCCLUSION #{occlusion_alert_count}] Eyes hidden from camera EAR={current_ear:.3f}")
                 play_occlusion_alert()
-                log_alert("eyes_occluded", {"ear": round(current_ear, 3)})
+                log_alert("eyes_occluded", {"ear": round(current_ear, 3), "speed_kmh": speed_gate.speed})
                 last_occlusion_alert = now
 
             # ── PERCLOS alert (rolling % eye closure) ──
-            if current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
+            if detection_active and current_perclos >= config.PERCLOS_ALERT_THRESHOLD and now - last_perclos_alert > config.PERCLOS_COOLDOWN_SEC:
                 perclos_alert_count += 1
                 print(f"[PERCLOS #{perclos_alert_count}] Rolling eye closure {current_perclos:.0%}")
                 play_perclos_alert()
-                log_alert("perclos_high", {"perclos": round(current_perclos, 3)})
+                log_alert("perclos_high", {"perclos": round(current_perclos, 3), "speed_kmh": speed_gate.speed})
                 last_perclos_alert = now
 
             # ── Yawn alert (rising edge only) ──
-            if yawn_confirmed and not last_yawn_confirmed and now - last_yawn_time > config.YAWN_COOLDOWN_SEC:
+            if detection_active and yawn_confirmed and not last_yawn_confirmed and now - last_yawn_time > config.YAWN_COOLDOWN_SEC:
                 yawn_count += 1
                 print(f"[YAWN #{yawn_count}] Yawn detected MAR={current_mar:.3f}")
                 play_yawn_alert()
-                log_alert("yawn_detected", {"mar": round(current_mar, 3)})
+                log_alert("yawn_detected", {"mar": round(current_mar, 3), "speed_kmh": speed_gate.speed})
                 last_yawn_time = now
             last_yawn_confirmed = yawn_confirmed
 
             # ── Distraction alert (sustained look-away) ──
             gaze_away_elapsed = (now - gaze_away_start) if gaze_away_start is not None else 0.0
-            if gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC and now - last_gaze_alert > config.DISTRACTION_COOLDOWN_SEC:
+            if detection_active and gaze_away_elapsed >= config.DISTRACTION_HOLD_SEC and now - last_gaze_alert > config.DISTRACTION_COOLDOWN_SEC:
                 gaze_distraction_count += 1
                 print(f"[DISTRACTION #{gaze_distraction_count}] Looking away yaw={current_yaw_deg:.1f} pitch={current_pitch_deg:.1f} roll={current_roll_deg:.1f}")
                 play_distraction_alert()
@@ -808,6 +842,7 @@ def run() -> None:
                     "yaw_deg": round(current_yaw_deg, 1),
                     "pitch_deg": round(current_pitch_deg, 1),
                     "roll_deg": round(current_roll_deg, 1),
+                    "speed_kmh": speed_gate.speed,
                 })
                 last_gaze_alert = now
 
@@ -818,18 +853,20 @@ def run() -> None:
             window_full = bool(pitch_history) and (now - pitch_history[0][0]) >= config.HEAD_DROP_WINDOW_SEC * 0.9
             pitch_rise = (smoothed_pitch_ratio - min(v for _, v in pitch_history)) if window_full else 0.0
             head_drop_confirmed = head_down_sec >= head_drop_hold_sec and pitch_rise >= config.HEAD_DROP_DELTA
-            if head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
+            if detection_active and head_drop_confirmed and now - last_head_drop_alert > config.HEAD_DROP_COOLDOWN_SEC:
                 head_drop_count += 1
                 print(f"[HEAD DROP #{head_drop_count}] pitch_ratio={current_pitch_ratio:.3f} rise={pitch_rise:.3f}")
                 play_head_drop_alert()
-                log_alert("head_drop_detected", {"pitch_ratio": round(current_pitch_ratio, 3), "pitch_rise": round(pitch_rise, 3)})
+                log_alert("head_drop_detected", {"pitch_ratio": round(current_pitch_ratio, 3),
+                                                 "pitch_rise": round(pitch_rise, 3),
+                                                 "speed_kmh": speed_gate.speed})
                 last_head_drop_alert = now
 
-            # ── YOLO detectors: skipped while the camera is blocked ──
+            # ── YOLO detectors: skipped while the camera is blocked or the vehicle is stopped ──
             # (a black frame would otherwise read as "no seatbelt" and fire false alerts)
             phone_detected = False
             phone_confidence = 0.0
-            if phone_detector and not camera_blocked:
+            if phone_detector and not camera_blocked and detection_active:
                 phone_detected, phone_confidence, phone_alert_fired, phone_distraction_fired = phone_detector.process(frame, now)
                 if phone_alert_fired:
                     print(f"[PHONE #{phone_detector.alert_count}] Phone detected conf={phone_confidence:.3f}")
@@ -840,7 +877,7 @@ def run() -> None:
 
             cigarette_detected = False
             cigarette_confidence = 0.0
-            if cigarette_detector and not camera_blocked:
+            if cigarette_detector and not camera_blocked and detection_active:
                 cigarette_detected, cigarette_confidence, cigarette_alert_fired = cigarette_detector.process(face_crop, now)
                 if cigarette_alert_fired:
                     print(f"[CIGARETTE #{cigarette_detector.alert_count}] Cigarette detected conf={cigarette_confidence:.3f}")
@@ -848,7 +885,7 @@ def run() -> None:
 
             seatbelt_present = True
             seatbelt_confidence = 0.0
-            if seatbelt_detector and not camera_blocked:
+            if seatbelt_detector and not camera_blocked and detection_active:
                 seatbelt_present, seatbelt_confidence, seatbelt_alert_fired = seatbelt_detector.process(frame, now)
                 if seatbelt_alert_fired:
                     print(f"[SEATBELT #{seatbelt_detector.alert_count}] No seatbelt detected conf={seatbelt_confidence:.3f}")
@@ -883,6 +920,7 @@ def run() -> None:
                 pitch_text = f"Pitch: {current_pitch_ratio:.2f} ({head_down_sec:.2f}s/{head_drop_hold_sec:.2f}s)  HeadDrops:{head_drop_count}"
                 perclos_text = f"PERCLOS: {current_perclos:.0%} ({config.PERCLOS_WINDOW_SEC:.0f}s)  Alerts:{perclos_alert_count}"
                 fps_text = f"FPS: {current_fps:.1f}"
+                speed_text = f"Vehicle: {speed_gate.status_text}  Monitoring:{'ON' if detection_active else 'PAUSED'}"
 
                 cv2.putText(frame, ear_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, ORANGE if is_drowsy else GREEN, 2)
                 cv2.putText(frame, mar_text, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED if is_yawning else GREEN, 2)
@@ -903,12 +941,19 @@ def run() -> None:
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
 
+                cv2.putText(frame, speed_text, (10, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if detection_active else ORANGE, 2)
+
                 # Drawn last so it sits on top of everything else.
                 if camera_blocked:
                     cv2.putText(frame, f"CAMERA BLOCKED ({camera_monitor.reason})", (10, h // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, RED, 3)
                     cv2.putText(frame, "Detection paused - uncover the camera", (10, h // 2 + 35),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, RED, 2)
+                elif not detection_active:
+                    cv2.putText(frame, "MONITORING PAUSED", (10, h // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, ORANGE, 3)
+                    cv2.putText(frame, f"Starts above {speed_gate.min_speed:.0f} km/h ({speed_gate.status_text})",
+                                (10, h // 2 + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ORANGE, 2)
                 elif face_missing_sec >= no_face_alert_sec:
                     cv2.putText(frame, "DRIVER FACE NOT DETECTED", (10, h // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, RED, 3)
@@ -942,6 +987,7 @@ def run() -> None:
         display.stop()
         grabber.release()
         cap.release()
+        speed_client.stop()
         shutdown_audio()
         frame_log.close()
 
