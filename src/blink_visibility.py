@@ -9,6 +9,12 @@ recovering -- is only possible if the camera can actually see the eyelid
 move. If no blink shows up over a long window, the eyes are either hidden
 from the camera or in sustained closure (already caught separately by the
 drowsiness counter), so treat "no blinks for a while" as "can't trust EAR."
+
+A current closed reading is never reported as occluded: eyes hidden behind
+IR-blocking lenses make the landmark model hallucinate OPEN eyes, so seeing
+a closure is itself evidence the eyelids are visible. Without this, a driver
+who stared for NO_BLINK_TIMEOUT_SEC and then fell asleep had the drowsiness
+alert suppressed for the whole closure.
 """
 
 from collections import deque
@@ -44,7 +50,8 @@ class BlinkVisibilityMonitor:
             self._blink_times.popleft()
 
         warmed_up = now - self._monitor_start >= self.no_blink_timeout_sec
-        return warmed_up and len(self._blink_times) == 0
+        in_closure = self._closed_since is not None
+        return warmed_up and len(self._blink_times) == 0 and not in_closure
 
     def reset(self) -> None:
         """Clear state, e.g. when the face is lost."""

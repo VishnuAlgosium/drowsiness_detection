@@ -12,6 +12,7 @@ alert can be identified by ear alone:
     perclos     -> slow triple tone, single pitch (gradual fatigue building)
     cigarette   -> triple tone, ascending
     seatbelt    -> double-buzz, repeated twice (car seatbelt chime style)
+    unknown driver -> long low tone + high tone (not an enrolled employee)
 """
 
 import numpy as np
@@ -133,6 +134,13 @@ def play_seatbelt_alert() -> None:
     beep = _beep(400, 0.12, vol=0.65)
     pair = np.concatenate([beep, silence, beep])
     seq = np.concatenate([pair, gap, pair])
+    _play_sequence(seq)
+
+
+def play_unknown_driver_alert() -> None:
+    """Long low tone then a short high one: driver is not an enrolled employee."""
+    silence = np.zeros(int(44100 * 0.1), dtype=np.int16)
+    seq = np.concatenate([_beep(330, 0.5, vol=0.6), silence, _beep(990, 0.2, vol=0.6)])
     _play_sequence(seq)
 
 
