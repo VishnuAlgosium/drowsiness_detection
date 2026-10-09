@@ -454,6 +454,7 @@ def run() -> None:
     phone_detector = PhoneDetector() if config.PHONE_DETECTION_ENABLED else None
     cigarette_detector = CigaretteDetector() if config.CIGARETTE_DETECTION_ENABLED else None
     seatbelt_detector = SeatbeltDetector() if config.SEATBELT_DETECTION_ENABLED else None
+    driver_identifier = _build_driver_identifier()
 
     # Vehicle speed from the driving-management WebSocket. Started early so it
     # is already connected by the time calibration finishes.
@@ -935,6 +936,11 @@ def run() -> None:
             # Keep the clear-view reference up to date (slowly) while the face is visible.
             if face_found and not camera_monitor.suspect:
                 camera_monitor.update_reference()
+                
+              # A long camera block can hide a driver swap just like face loss can.
+            blocked_since = (blocked_since or now) if camera_blocked else None
+            if identity is not None and blocked_since is not None:
+                identity.face_lost(now - blocked_since)
 
             # ── Driver face not detected (camera itself is clear, vehicle moving) ──
             if camera_blocked or not detection_active:
@@ -1162,6 +1168,17 @@ def run() -> None:
                 if seatbelt_detector:
                     seatbelt_text = f"Seatbelt: {seatbelt_confidence:.2f}  Alerts:{seatbelt_detector.alert_count}"
                     cv2.putText(frame, seatbelt_text, (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.55, GREEN if seatbelt_present else RED, 2)
+                    
+                    
+                if identity is not None:
+                    id_color = (GREEN if identity.driver_id not in (None, UNKNOWN)
+                                else RED if identity.driver_id == UNKNOWN else (0, 200, 255))
+                    cv2.putText(frame, f"Driver: {identity.label}", (10, 255),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, id_color, 2)
+                    if face_bbox is not None:
+                        driver_identifier.draw_face_box(
+                            frame, face_bbox, "KNOWN" if identity.driver_id not in (None, UNKNOWN) else "UNKNOWN",
+                            identity.driver_id or "", identity.driver_name, identity.score)
 
                 # Drawn last so it sits on top of everything else.
                 if camera_blocked:
